@@ -2,7 +2,7 @@
 
 > AI-powered portfolio protection agent that monitors 10 volatile EVM coins simultaneously — auto-swapping to USDC when danger is detected, buying on opportunity, all without you lifting a finger.
 
-[![CI](https://github.com/YOUR_USERNAME/Crypto-Guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/Crypto-Guardian/actions/workflows/ci.yml)
+[![CI](https://github.com/ryzen-xp/Crypto-Guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/ryzen-xp/Crypto-Guardian/actions/workflows/ci.yml)
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
 ![Base](https://img.shields.io/badge/Chain-Base_Mainnet-0052FF?logo=coinbase)
