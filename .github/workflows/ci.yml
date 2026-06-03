@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Code Quality ─────────────────────────────────────────────────────────────
+  quality:
+    name: Type Check · Lint · Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm type-check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+  # ─── Build ────────────────────────────────────────────────────────────────────
+  build:
+    name: Production Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: quality
+
+    env:
+      # Dummy values so Next.js build doesn't fail on missing env vars.
+      # Real secrets live in Vercel environment — never in CI.
+      VENICE_API_KEY: ci_placeholder
+      ONESHOT_API_KEY: ci_placeholder
+      ONESHOT_API_URL: https://api.1shotapi.com
+      ONESHOT_WEBHOOK_SECRET: ci_placeholder
+      NEXT_PUBLIC_WALLET_CONNECT_ID: ci_placeholder
+      NEXT_PUBLIC_CHAIN_ID: 8453
+      NEXT_PUBLIC_USDC_ADDRESS: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+      NEXT_PUBLIC_UNISWAP_ROUTER: '0x2626664c2603336E57B271c5C0b26F421741e481'
+      NEXT_PUBLIC_APP_URL: https://cryptoguardian.vercel.app
+      NEXTAUTH_SECRET: ci_placeholder_secret_32_chars_min
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: next-build-${{ github.sha }}
+          path: .next/
+          retention-days: 3
