@@ -42,32 +42,32 @@ When it spots a real opportunity — positive momentum backed by news — it can
 
 ```mermaid
 graph TB
-    subgraph Frontend["Frontend (Next.js 14)"]
-        LP[Landing Page]
-        SP[Setup Page]
-        DB[Dashboard]
-        CD[Coin Detail]
-        ST[Settings]
+    subgraph FE["Frontend (Next.js 16)"]
+        LP["Landing Page"]
+        SP["Setup Page"]
+        DB["Dashboard"]
+        CD["Coin Detail"]
+        ST["Settings"]
     end
 
-    subgraph API["API Routes (Next.js)"]
-        AG[/api/agent]
-        MD[/api/market-data]
-        VA[/api/venice-analysis]
-        ES[/api/execute-swap]
-        WH[/api/webhooks]
+    subgraph API["API Routes"]
+        AG["/api/agent"]
+        MD["/api/market-data"]
+        VA["/api/venice-analysis"]
+        ES["/api/execute-swap"]
+        WH["/api/webhooks"]
     end
 
-    subgraph External["External Services"]
-        CG[CoinGecko API\nPrices + Changes]
-        FG[Fear & Greed API\nalternative.me]
-        VN[Venice AI\nllama-3.3-70b]
-        MM[MetaMask\nSmart Account]
-        OS[1Shot Relayer\nGas in USDC]
-        UN[Uniswap v3\nBase Mainnet]
+    subgraph EXT["External Services"]
+        CG["CoinGecko API"]
+        FG["Fear and Greed API"]
+        VN["Venice AI llama-3.3-70b"]
+        MM["MetaMask Smart Account"]
+        OS["1Shot Relayer"]
+        UN["Uniswap v3 on Base"]
     end
 
-    DB -->|poll every 15min| AG
+    DB -- "poll every 15 min" --> AG
     AG --> MD
     AG --> VA
     AG --> ES
@@ -76,12 +76,8 @@ graph TB
     VA --> VN
     ES --> UN
     ES --> OS
-    OS -->|webhook| WH
-    MM -->|permissions| AG
-
-    style Frontend fill:#1e3a5f,stroke:#3b82f6
-    style API fill:#1a2e1a,stroke:#22c55e
-    style External fill:#2d1a1a,stroke:#ef4444
+    OS -- "webhook" --> WH
+    MM -- "permissions" --> AG
 ```
 
 ---
@@ -90,47 +86,32 @@ graph TB
 
 ```mermaid
 flowchart TD
-    START([▶ Agent Loop Starts]) --> FETCH
+    START([Agent Loop Starts]) --> FETCH
 
-    FETCH[1. Fetch all coin prices\nCoinGecko API\n1hr + 24hr % change] --> FEAR
+    FETCH["1. Fetch all coin prices<br/>CoinGecko API<br/>1hr + 24hr % change"] --> FEAR
+    FEAR["2. Fetch Fear and Greed Index<br/>alternative.me"] --> NEWS
+    NEWS["3. Venice AI web search<br/>Latest news per coin<br/>Runs in parallel"] --> ANALYZE
+    ANALYZE["4. Venice AI Analysis<br/>llama-3.3-70b"] --> PARSE
+    PARSE["5. Parse Response<br/>Verdict per coin + priority coin"] --> CHECK
 
-    FEAR[2. Fetch Fear & Greed Index\nalternative.me] --> NEWS
+    CHECK{"6. Check User Rules<br/>Limits / Sensitivity / Paused?"}
 
-    NEWS[3. Venice AI web_search\nLatest news per coin\nRuns in parallel] --> ANALYZE
+    CHECK -- "Allowed" --> ACTION
+    CHECK -- "Blocked" --> SKIP
 
-    ANALYZE[4. Venice AI Analysis\nllama-3.3-70b\nAll market data in one prompt] --> PARSE
+    ACTION{"7. What action?"}
+    ACTION -- "DANGER - SELL" --> SWAP_SELL
+    ACTION -- "OPPORTUNITY - BUY" --> SWAP_BUY
+    ACTION -- "CAUTION or NEUTRAL" --> SKIP
 
-    PARSE[5. Parse Response\nVerdict per coin\nPriority coin + reasoning] --> CHECK
+    SWAP_SELL["8a. Build sell calldata<br/>Token to Stablecoin<br/>Uniswap v3"] --> RELAY
+    SWAP_BUY["8b. Build buy calldata<br/>Stablecoin to Token<br/>Uniswap v3"] --> RELAY
 
-    CHECK{6. Check User Rules\nLimits · Sensitivity · Paused?}
-
-    CHECK -->|Allowed| ACTION
-    CHECK -->|Blocked| SKIP
-
-    ACTION{7. What action?}
-    ACTION -->|DANGER → SELL| SWAP_SELL
-    ACTION -->|OPPORTUNITY → BUY| SWAP_BUY
-    ACTION -->|CAUTION/NEUTRAL| SKIP
-
-    SWAP_SELL[8a. Build sell calldata\nToken → USDC\nUniswap v3] --> RELAY
-    SWAP_BUY[8b. Build buy calldata\nUSDC → Token\nUniswap v3] --> RELAY
-
-    RELAY[9. Submit to 1Shot Relayer\nGas paid in USDC\nNo ETH needed] --> WEBHOOK
-
-    WEBHOOK[10. Webhook confirms tx\nBasescan link logged] --> LOG
-
-    SKIP[Log: Skipped\nWith reason] --> LOG
-
-    LOG[11. Update Dashboard\nVerdict grid · AI reasoning\nAction feed] --> WAIT
-
-    WAIT([⏱ Wait 15 minutes]) --> START
-
-    style START fill:#1e3a5f,stroke:#3b82f6
-    style ANALYZE fill:#3b1a5f,stroke:#a855f7
-    style RELAY fill:#1a3b1a,stroke:#22c55e
-    style SKIP fill:#2d2d1a,stroke:#eab308
-    style SWAP_SELL fill:#3b1a1a,stroke:#ef4444
-    style SWAP_BUY fill:#1a3b1a,stroke:#22c55e
+    RELAY["9. Submit to 1Shot Relayer<br/>Gas paid in stablecoin"] --> WEBHOOK
+    WEBHOOK["10. Webhook confirms tx<br/>Basescan link logged"] --> LOG
+    SKIP["Log: Skipped with reason"] --> LOG
+    LOG["11. Update Dashboard<br/>Verdict grid + AI reasoning + feed"] --> WAIT
+    WAIT([Wait 15 minutes]) --> START
 ```
 
 ---
@@ -156,19 +137,19 @@ sequenceDiagram
     BC-->>OS: Smart Account active
     OS-->>App: smartAccountAddress
 
-    Note over App,MM: One-time permission grant (30 days)
+    Note over App,MM: One-time permission grant 30 days
 
-    App->>U: Show permission summary\n(coins + limits + expiry)
+    App->>U: Show permission summary
     U->>MM: Sign ERC-7715 grant
     MM->>BC: Register permissions onchain
     BC-->>App: Grant confirmed
 
-    Note over App,BC: Every swap (no signing required)
+    Note over App,BC: Every swap - no signing required
 
-    App->>OS: POST /v1/relay (swap calldata)
-    OS->>BC: Execute via Smart Account\n(gas paid in USDC)
+    App->>OS: POST /v1/relay swap calldata
+    OS->>BC: Execute via Smart Account
     BC-->>OS: Transaction confirmed
-    OS->>App: Webhook: tx hash
+    OS->>App: Webhook tx hash
 ```
 
 ---
@@ -178,21 +159,21 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     subgraph Inputs["Market Inputs"]
-        P[Prices\n10 coins]
-        F[Fear & Greed\nIndex 0-100]
-        N[News\nper coin]
-        S[User Settings\nrisk sensitivity]
+        P["Prices - 10 coins"]
+        F["Fear and Greed Index"]
+        N["News per coin"]
+        S["User Settings"]
     end
 
     subgraph Venice["Venice AI llama-3.3-70b"]
-        WS[Call 1: web_search\nLatest news per coin\nParallelized]
-        AN[Call 2: Analysis\nSystem prompt:\nSenior crypto analyst\n15yr experience]
+        WS["Call 1: web search<br/>Latest news per coin<br/>Parallelized"]
+        AN["Call 2: Analysis<br/>Senior crypto analyst<br/>15yr experience"]
     end
 
     subgraph Output["Structured Response"]
-        VD[Verdicts per coin\nDANGER CAUTION\nNEUTRAL OPPORTUNITY]
-        PC[Priority Coin\nNeeds action NOW]
-        RE[Reasoning\n2-sentence guru insight]
+        VD["Verdicts per coin<br/>DANGER / CAUTION<br/>NEUTRAL / OPPORTUNITY"]
+        PC["Priority Coin<br/>Needs action NOW"]
+        RE["Reasoning<br/>2-sentence guru insight"]
     end
 
     P --> AN
@@ -202,10 +183,6 @@ flowchart LR
     AN --> VD
     AN --> PC
     AN --> RE
-
-    style Venice fill:#3b1a5f,stroke:#a855f7
-    style Inputs fill:#1e3a5f,stroke:#3b82f6
-    style Output fill:#1a3b1a,stroke:#22c55e
 ```
 
 ---
