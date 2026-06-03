@@ -1,0 +1,57 @@
+@import 'tailwindcss';
+
+:root {
+  --background: #030712;
+  --foreground: #f9fafb;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #111827;
+}
+::-webkit-scrollbar-thumb {
+  background: #374151;
+  border-radius: 3px;
+}
+
+/* Verdict pulse animations */
+@keyframes pulse-danger {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+}
+
+@keyframes pulse-opportunity {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+  }
+}
+
+.pulse-danger {
+  animation: pulse-danger 2s infinite;
+}
+
+.pulse-opportunity {
+  animation: pulse-opportunity 2s infinite;
+}
+
+/* Monospace for prices and addresses */
+.font-mono {
+  font-family: var(--font-geist-mono), monospace;
+}
