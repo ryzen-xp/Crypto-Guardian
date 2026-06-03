@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { buildSellToUSDC, buildBuyWithUSDC } from '@/lib/uniswap'
+import { buildSellToStable, buildBuyWithStable } from '@/lib/uniswap'
 import { relayTransaction } from '@/lib/oneshot'
-import { getCoin } from '@/lib/coins'
+import { getCoin, DEFAULT_STABLECOIN, STABLECOINS } from '@/lib/coins'
 
 type RequestBody = {
   userAddress: string
@@ -9,12 +9,21 @@ type RequestBody = {
   action: 'BUY' | 'SELL'
   amountUSD: number
   tokenPriceUSD: number
+  /** Symbol of the user's chosen stablecoin — defaults to USDC */
+  stablecoinSymbol?: string
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as RequestBody
-    const { userAddress, coinSymbol, action, amountUSD, tokenPriceUSD } = body
+    const {
+      userAddress,
+      coinSymbol,
+      action,
+      amountUSD,
+      tokenPriceUSD,
+      stablecoinSymbol = DEFAULT_STABLECOIN,
+    } = body
 
     if (!userAddress || !coinSymbol || !action || !amountUSD) {
       return NextResponse.json(
@@ -23,21 +32,34 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    if (!STABLECOINS[stablecoinSymbol]) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Unknown stablecoin: ${stablecoinSymbol}. Supported: ${Object.keys(STABLECOINS).join(', ')}`,
+          code: 'INVALID_STABLECOIN',
+        },
+        { status: 400 }
+      )
+    }
+
     const coin = getCoin(coinSymbol)
 
     const calldata =
       action === 'SELL'
-        ? buildSellToUSDC({
+        ? buildSellToStable({
             tokenAddress: coin.baseAddress,
             tokenDecimals: coin.decimals,
             amountInUSD: amountUSD,
             tokenPriceUSD,
             recipient: userAddress,
+            stablecoinSymbol,
           })
-        : buildBuyWithUSDC({
+        : buildBuyWithStable({
             tokenAddress: coin.baseAddress,
             amountInUSD: amountUSD,
             recipient: userAddress,
+            stablecoinSymbol,
           })
 
     const relay = await relayTransaction({

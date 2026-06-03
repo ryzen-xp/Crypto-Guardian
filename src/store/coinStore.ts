@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { CoinSettings, CoinSetting } from '@/lib/types'
+import { DEFAULT_STABLECOIN } from '@/lib/coins'
 
 const DEFAULT_COIN_SETTING: CoinSetting = {
   enabled: false,
@@ -17,6 +18,8 @@ type CoinStore = {
   coinSettings: CoinSettings
   // Master pause toggle
   isPaused: boolean
+  // Safe asset — user's chosen stablecoin to swap into on DANGER
+  selectedStablecoin: string
 
   // Actions
   toggleCoin: (symbol: string) => void
@@ -25,6 +28,7 @@ type CoinStore = {
   setCoinSettings: (settings: CoinSettings) => void
   togglePause: () => void
   setPaused: (paused: boolean) => void
+  setSelectedStablecoin: (symbol: string) => void
   resetToDefaults: () => void
 }
 
@@ -34,6 +38,7 @@ export const useCoinStore = create<CoinStore>()(
       selectedCoins: [],
       coinSettings: {},
       isPaused: false,
+      selectedStablecoin: DEFAULT_STABLECOIN,
 
       toggleCoin: (symbol) => {
         const { selectedCoins, coinSettings } = get()
@@ -85,16 +90,19 @@ export const useCoinStore = create<CoinStore>()(
 
       setPaused: (paused) => set({ isPaused: paused }),
 
+      setSelectedStablecoin: (symbol) => set({ selectedStablecoin: symbol }),
+
       resetToDefaults: () =>
         set({
           selectedCoins: [],
           coinSettings: {},
           isPaused: false,
+          selectedStablecoin: DEFAULT_STABLECOIN,
         }),
     }),
     {
       name: 'cryptoguardian-coin-settings',
-      version: 1,
+      version: 2, // bumped — new stablecoin field added
     }
   )
 )

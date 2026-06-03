@@ -1,9 +1,52 @@
-import type { CoinConfig } from './types'
+import type { CoinConfig, StablecoinConfig } from './types'
 
-// ─── USDC (safe asset — all swaps go here) ────────────────────────────────────
+// ─── Supported Stablecoins on Base Mainnet ────────────────────────────────────
+// User picks ONE of these as their safe asset. All danger swaps go here.
 
-export const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const
-export const USDC_DECIMALS = 6
+export const STABLECOINS: Record<string, StablecoinConfig> = {
+  USDC: {
+    symbol: 'USDC',
+    name: 'USD Coin',
+    address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    decimals: 6,
+    logoUrl: '/coin-icons/usdc.svg',
+    description: 'Most liquid stablecoin on Base. Widest Uniswap pool coverage.',
+  },
+  USDT: {
+    symbol: 'USDT',
+    name: 'Tether USD',
+    address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+    decimals: 6,
+    logoUrl: '/coin-icons/usdt.svg',
+    description: 'Largest stablecoin by market cap. Good liquidity on Base.',
+  },
+  DAI: {
+    symbol: 'DAI',
+    name: 'Dai Stablecoin',
+    address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb',
+    decimals: 18,
+    logoUrl: '/coin-icons/dai.svg',
+    description: 'Decentralized, crypto-backed stablecoin by MakerDAO.',
+  },
+  USDBC: {
+    symbol: 'USDbC',
+    name: 'Bridged USDC (Base)',
+    address: '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA',
+    decimals: 6,
+    logoUrl: '/coin-icons/usdbc.svg',
+    description: 'Original bridged USDC on Base. Legacy option.',
+  },
+}
+
+/** Default stablecoin — used if user hasn't picked one yet */
+export const DEFAULT_STABLECOIN = 'USDC'
+
+/** Get stablecoin config by symbol, throws if not found */
+export function getStablecoin(symbol: string): StablecoinConfig {
+  const stable = STABLECOINS[symbol]
+  if (!stable) throw new Error(`Unknown stablecoin: ${symbol}`)
+  return stable
+}
 
 // ─── Uniswap V3 on Base ───────────────────────────────────────────────────────
 

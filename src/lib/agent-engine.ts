@@ -1,7 +1,7 @@
 import { getCoin, MONITORED_COINS } from './coins'
 import { fetchMarketSnapshot } from './market-data'
 import { fetchAllCoinNews, analyzeMarket } from './venice'
-import { buildSellToUSDC, buildBuyWithUSDC } from './uniswap'
+import { buildSellToStable, buildBuyWithStable } from './uniswap'
 import { relayTransaction } from './oneshot'
 import type { AgentAction, AgentLoopResult, CoinSettings, Verdict } from './types'
 
@@ -30,6 +30,8 @@ type AgentLoopParams = {
   userAddress: string
   activeCoins: string[]
   coinSettings: CoinSettings
+  /** Symbol of the user's chosen stablecoin (USDC, USDT, DAI, USDbC) */
+  stablecoinSymbol: string
   forceRun?: boolean
 }
 
@@ -43,7 +45,7 @@ type AgentLoopParams = {
  * 6. Return full result for dashboard
  */
 export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopResult> {
-  const { userAddress, activeCoins, coinSettings, forceRun = false } = params
+  const { userAddress, activeCoins, coinSettings, stablecoinSymbol, forceRun = false } = params
 
   if (!forceRun && isOnCooldown()) {
     throw new Error(`Agent is on cooldown. Next run at: ${getNextRunAt().toISOString()}`)
@@ -94,7 +96,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
       userAddress,
       price: marketSnapshot.prices[prioritySymbol]?.usd ?? 0,
       reasoning: analysis.reasoning,
-      coinSettings,
+      stablecoinSymbol,
     })
   } else {
     // Log the skip
@@ -121,6 +123,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     loopDurationMs: Date.now() - startTime,
     nextRunAt: getNextRunAt(),
     ranAt: lastRunAt,
+    stablecoinUsed: stablecoinSymbol,
   }
 }
 
@@ -215,28 +218,31 @@ type ExecuteSwapParams = {
   userAddress: string
   price: number
   reasoning: string
-  coinSettings: CoinSettings
+  stablecoinSymbol: string
 }
 
 async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
-  const { symbol, action, verdict, amountUSD, userAddress, price, reasoning } = params
+  const { symbol, action, verdict, amountUSD, userAddress, price, reasoning, stablecoinSymbol } =
+    params
 
   const coin = getCoin(symbol)
 
   try {
     const calldata =
       action === 'SELL'
-        ? buildSellToUSDC({
+        ? buildSellToStable({
             tokenAddress: coin.baseAddress,
             tokenDecimals: coin.decimals,
             amountInUSD: amountUSD,
             tokenPriceUSD: price,
             recipient: userAddress,
+            stablecoinSymbol,
           })
-        : buildBuyWithUSDC({
+        : buildBuyWithStable({
             tokenAddress: coin.baseAddress,
             amountInUSD: amountUSD,
             recipient: userAddress,
+            stablecoinSymbol,
           })
 
     const relay = await relayTransaction({

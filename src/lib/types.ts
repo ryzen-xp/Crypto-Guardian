@@ -16,6 +16,17 @@ export type CoinConfig = {
   isWrapped?: boolean
 }
 
+// ─── Stablecoins ──────────────────────────────────────────────────────────────
+
+export type StablecoinConfig = {
+  symbol: string
+  name: string
+  address: string
+  decimals: number
+  logoUrl: string
+  description: string
+}
+
 // ─── Market Data ─────────────────────────────────────────────────────────────
 
 export type CoinPrice = {
@@ -78,6 +89,7 @@ export type AgentLoopResult = {
   loopDurationMs: number
   nextRunAt: Date
   ranAt: Date
+  stablecoinUsed: string
 }
 
 // ─── Venice AI ───────────────────────────────────────────────────────────────
