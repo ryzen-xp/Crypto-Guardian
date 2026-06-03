@@ -3,6 +3,7 @@ import { fetchMarketSnapshot } from './market-data'
 import { fetchAllCoinNews, analyzeMarket } from './venice'
 import { buildSellToStable, buildBuyWithStable } from './uniswap'
 import { relayTransaction } from './oneshot'
+import { IS_TESTNET } from './chain-config'
 import type { AgentAction, AgentLoopResult, CoinSettings, Verdict } from './types'
 
 // ─── Cooldown ─────────────────────────────────────────────────────────────────
@@ -249,7 +250,7 @@ async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
       to: calldata.to,
       data: calldata.data,
       userAddress,
-      chainId: 8453,
+      chainId: IS_TESTNET ? 84532 : 8453,
     })
 
     return {

@@ -114,7 +114,12 @@ export function getVerdictEmoji(verdict: Verdict): string {
   }
 }
 
-/** Basescan link for a transaction */
+/** Explorer link for a transaction — chain-aware */
 export function getBasescanUrl(txHash: string): string {
-  return `https://basescan.org/tx/${txHash}`
+  const explorerUrl =
+    typeof window !== 'undefined'
+      ? (document.querySelector('meta[name="explorer-url"]')?.getAttribute('content') ??
+        'https://sepolia.basescan.org')
+      : 'https://sepolia.basescan.org'
+  return `${explorerUrl}/tx/${txHash}`
 }
