@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { useAccount, useSwitchChain } from 'wagmi'
+import { useAccount, useSwitchChain, useSignMessage } from 'wagmi'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 
 export const dynamic = 'force-dynamic'
@@ -49,6 +49,7 @@ export default function SetupPage() {
     selectedStablecoin,
     setSelectedStablecoin,
     coinSettings,
+    updateCoinSetting,
   } = useCoinStore()
 
   const {
@@ -61,6 +62,10 @@ export default function SetupPage() {
 
   const [step, setStep] = useState(1)
   const [permissionsGranted, setPermissionsGranted] = useState(false)
+  const [isSigning, setIsSigning] = useState(false)
+  const [signatureError, setSignatureError] = useState<string | null>(null)
+
+  const { signMessageAsync } = useSignMessage()
 
   const stablecoins = Object.values(STABLECOINS)
   const isOnCorrectChain = chain?.id === ACTIVE_CHAIN.id
@@ -82,10 +87,36 @@ export default function SetupPage() {
     else if (step === 3) router.push('/dashboard')
   }
 
-  const handleGrantPermissions = () => {
-    // Production: ERC-7715 grant via MetaMask delegation toolkit
-    // Testnet: simulate the grant
-    setPermissionsGranted(true)
+  const handleGrantPermissions = async () => {
+    setIsSigning(true)
+    setSignatureError(null)
+    try {
+      const msg = `Authorize Crypto-Guardian agent rules on Sepolia Testnet.
+
+Monitored Coins & Daily Limits:
+${selectedCoins
+  .map((symbol) => {
+    const setting = coinSettings[symbol] ?? {
+      maxSwapUSD: 300,
+      dailyLimitUSD: 600,
+      riskSensitivity: 'conservative',
+    }
+    return `- ${symbol}: Max $${setting.maxSwapUSD}/swap, Daily Limit: $${setting.dailyLimitUSD}, Risk: ${setting.riskSensitivity}`
+  })
+  .join('\n')}
+
+Safe Stablecoin: ${selectedStablecoin}
+Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
+
+      const signature = await signMessageAsync({ message: msg })
+      console.log('Permission signature obtained:', signature)
+      setPermissionsGranted(true)
+    } catch (err) {
+      console.error('Signing failed:', err)
+      setSignatureError(err instanceof Error ? err.message : 'Signature request rejected.')
+    } finally {
+      setIsSigning(false)
+    }
   }
 
   const canContinue =
@@ -378,76 +409,180 @@ export default function SetupPage() {
 
         {/* ── Step 3: Grant Permissions ── */}
         {step === 3 && (
-          <div className="rounded-2xl border border-white/8 bg-white/3 p-6">
-            <h2 className="mb-1 text-xl font-bold">Grant agent permissions</h2>
-            <p className="mb-6 text-sm text-gray-400">
-              One-time MetaMask signature. Valid for 30 days. Revoke anytime in Settings.
-            </p>
-
-            <div className="mb-6 rounded-xl border border-white/8 bg-gray-900 p-4">
-              <p className="mb-3 text-xs font-semibold tracking-wider text-gray-500 uppercase">
-                Permission Summary
+          <div className="space-y-6">
+            {/* Custom Rules Configurator */}
+            <div className="rounded-2xl border border-white/8 bg-white/3 p-6">
+              <h2 className="mb-1 text-xl font-bold text-white">Configure Swap Rules</h2>
+              <p className="mb-5 text-sm text-gray-400">
+                Manually customize the protection parameters for each asset.
               </p>
-              <div className="space-y-2">
+
+              <div className="space-y-4">
                 {selectedCoins.map((symbol) => {
-                  const setting = coinSettings[symbol]
+                  const setting = coinSettings[symbol] ?? {
+                    enabled: true,
+                    maxSwapUSD: 300,
+                    dailyLimitUSD: 600,
+                    minHoldUSD: 100,
+                    riskSensitivity: 'conservative',
+                  }
+
                   return (
-                    <div key={symbol} className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Check className="h-3.5 w-3.5 text-green-400" />
-                        <span className="text-sm font-medium">{symbol}</span>
+                    <div key={symbol} className="rounded-xl border border-white/8 bg-gray-900/50 p-4">
+                      <div className="mb-3 flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-green-400" />
+                          <span className="font-bold text-white">{symbol} Protection Rules</span>
+                        </div>
                       </div>
-                      <span className="text-xs text-gray-500">
-                        max ${setting?.maxSwapUSD ?? 300}/swap · ${setting?.dailyLimitUSD ?? 600}
-                        /day
-                      </span>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-400 mb-1">
+                            Max Per Swap (USD)
+                          </label>
+                          <div className="relative flex items-center">
+                            <span className="absolute left-3 text-sm text-gray-500 font-mono">$</span>
+                            <input
+                              type="number"
+                              min="1"
+                              value={setting.maxSwapUSD}
+                              onChange={(e) =>
+                                updateCoinSetting(symbol, {
+                                  maxSwapUSD: Math.max(1, Number(e.target.value)),
+                                })
+                              }
+                              className="w-full rounded-lg border border-white/10 bg-white/5 pl-7 pr-3 py-1.5 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-400 mb-1">
+                            Daily Limit (USD)
+                          </label>
+                          <div className="relative flex items-center">
+                            <span className="absolute left-3 text-sm text-gray-500 font-mono">$</span>
+                            <input
+                              type="number"
+                              min="1"
+                              value={setting.dailyLimitUSD}
+                              onChange={(e) =>
+                                updateCoinSetting(symbol, {
+                                  dailyLimitUSD: Math.max(1, Number(e.target.value)),
+                                })
+                              }
+                              className="w-full rounded-lg border border-white/10 bg-white/5 pl-7 pr-3 py-1.5 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-semibold text-gray-400 mb-1">
+                            Risk Sensitivity Mode
+                          </label>
+                          <select
+                            value={setting.riskSensitivity}
+                            onChange={(e) =>
+                              updateCoinSetting(symbol, {
+                                riskSensitivity: e.target.value as 'conservative' | 'moderate' | 'aggressive',
+                              })
+                            }
+                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-950"
+                          >
+                            <option value="conservative">Conservative (Swap 25% on DANGER)</option>
+                            <option value="moderate">Moderate (Swap 50% on DANGER)</option>
+                            <option value="aggressive">Aggressive (Swap 75% on DANGER, BUY on OPPORTUNITY)</option>
+                          </select>
+                        </div>
+                      </div>
                     </div>
                   )
                 })}
-                <div className="flex items-center justify-between border-t border-white/5 pt-2">
-                  <div className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-blue-400" />
-                    <span className="text-sm font-medium">Safe asset</span>
-                  </div>
-                  <span className="text-xs text-gray-500">{selectedStablecoin}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-yellow-400" />
-                    <span className="text-sm font-medium">Expiry</span>
-                  </div>
-                  <span className="text-xs text-gray-500">30 days from now</span>
-                </div>
               </div>
             </div>
 
-            {!permissionsGranted ? (
-              <>
-                {address && (
-                  <p className="mb-4 text-center font-mono text-xs text-gray-500">
-                    Signing as {shortenAddress(address)}
-                  </p>
-                )}
-                <button
-                  onClick={handleGrantPermissions}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3.5 text-sm font-semibold shadow-lg shadow-green-600/20 transition hover:bg-green-500"
-                >
-                  <Lock className="h-4 w-4" />
-                  Sign &amp; Grant Permissions
-                </button>
-                <p className="mt-3 text-center text-xs text-gray-600">
-                  Triggers a MetaMask signature request (ERC-7715)
+            {/* Cryptographic signature verification and grant */}
+            <div className="rounded-2xl border border-white/8 bg-white/3 p-6">
+              <h2 className="mb-1 text-xl font-bold">Sign &amp; Enable Agent</h2>
+              <p className="mb-6 text-sm text-gray-400">
+                Verify authorization parameters by signing a cryptographic message with MetaMask.
+              </p>
+
+              <div className="mb-6 rounded-xl border border-white/8 bg-gray-950 p-4">
+                <p className="mb-3 text-xs font-semibold tracking-wider text-gray-500 uppercase">
+                  Current Settings Summary
                 </p>
-              </>
-            ) : (
-              <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-5 text-center">
-                <CheckCircle className="mx-auto mb-2 h-10 w-10 text-green-400" />
-                <p className="font-semibold text-green-400">Permissions granted!</p>
-                <p className="mt-1 text-xs text-gray-400">
-                  CryptoGuardian will now monitor {selectedCoins.join(', ')} in your wallet.
-                </p>
+                <div className="space-y-2">
+                  {selectedCoins.map((symbol) => {
+                    const setting = coinSettings[symbol]
+                    return (
+                      <div key={symbol} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 w-1.5 rounded-full bg-green-400" />
+                          <span className="text-sm font-medium">{symbol}</span>
+                        </div>
+                        <span className="text-xs text-gray-400 font-mono">
+                          max ${setting?.maxSwapUSD ?? 300}/swap · ${setting?.dailyLimitUSD ?? 600}/day
+                        </span>
+                      </div>
+                    )
+                  })}
+                  <div className="flex items-center justify-between border-t border-white/5 pt-2">
+                    <span className="text-sm font-medium text-gray-300">Target safe asset</span>
+                    <span className="text-xs font-semibold text-blue-400">{selectedStablecoin}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-300">Grant expiry</span>
+                    <span className="text-xs text-gray-400">30 days from now</span>
+                  </div>
+                </div>
               </div>
-            )}
+
+              {signatureError && (
+                <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">
+                  <span className="font-semibold">Signature Error:</span> {signatureError}
+                </div>
+              )}
+
+              {!permissionsGranted ? (
+                <>
+                  {address && (
+                    <p className="mb-4 text-center font-mono text-xs text-gray-500">
+                      Signer: {shortenAddress(address)}
+                    </p>
+                  )}
+                  <button
+                    onClick={handleGrantPermissions}
+                    disabled={isSigning}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3.5 text-sm font-semibold shadow-lg shadow-green-600/20 transition hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSigning ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        Requesting Signature...
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="h-4 w-4" />
+                        Sign &amp; Enable Protection
+                      </>
+                    )}
+                  </button>
+                  <p className="mt-3 text-center text-xs text-gray-600">
+                    Triggers a cryptographic MetaMask signature request to authorize EIP-7702 and 1Shot relayer execution.
+                  </p>
+                </>
+              ) : (
+                <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-5 text-center">
+                  <CheckCircle className="mx-auto mb-2 h-10 w-10 text-green-400 animate-bounce" />
+                  <p className="font-semibold text-green-400">Signature authorized successfully!</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    CryptoGuardian agent is now running and monitoring your assets.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

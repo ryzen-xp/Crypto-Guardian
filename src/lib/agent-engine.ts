@@ -8,7 +8,7 @@ import type { AgentAction, AgentLoopResult, CoinSettings, Verdict } from './type
 
 // ─── Cooldown ─────────────────────────────────────────────────────────────────
 
-const LOOP_INTERVAL_MS = 15 * 60 * 1000 // 15 minutes
+const LOOP_INTERVAL_MS = 100 * 1000 // 100 seconds
 let lastRunAt: Date | null = null
 
 export function getLastRunAt(): Date | null {
@@ -264,7 +264,7 @@ async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
       to: calldata.to,
       data: calldata.data,
       userAddress,
-      chainId: IS_TESTNET ? 84532 : 8453,
+      chainId: IS_TESTNET ? 11155111 : 1,
     })
 
     return {

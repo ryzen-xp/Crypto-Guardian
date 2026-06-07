@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
       to: calldata.to,
       data: calldata.data,
       userAddress,
-      chainId: 8453,
+      chainId: 11155111, // Ethereum Sepolia (change to 1 for mainnet)
     })
 
     return NextResponse.json({ success: true, data: relay })

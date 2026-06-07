@@ -11,20 +11,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { MONITORED_COINS, STABLECOINS } from '@/lib/coins'
-
-const COIN_VERDICTS = [
-  { symbol: 'ETH', verdict: 'NEUTRAL', change: '+0.4%', color: 'text-gray-400', dot: '⚪' },
-  { symbol: 'WBTC', verdict: 'OPPORTUNITY', change: '+1.8%', color: 'text-green-400', dot: '🟢' },
-  { symbol: 'ARB', verdict: 'DANGER', change: '-14.8%', color: 'text-red-400', dot: '🔴' },
-  { symbol: 'OP', verdict: 'CAUTION', change: '-3.9%', color: 'text-yellow-400', dot: '🟡' },
-]
-
-const VERDICT_BG: Record<string, string> = {
-  NEUTRAL: 'border-white/10 bg-white/3',
-  OPPORTUNITY: 'border-green-500/30 bg-green-500/5',
-  DANGER: 'border-red-500/30 bg-red-500/5',
-  CAUTION: 'border-yellow-500/30 bg-yellow-500/5',
-}
+import LiveMockup from '@/components/layout/LiveMockup'
 
 export default function LandingPage() {
   const stablecoins = Object.values(STABLECOINS)
@@ -99,64 +86,9 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Live mockup */}
+      {/* Live mockup — fetches real prices client-side */}
       <section className="mx-auto mb-24 max-w-3xl px-4">
-        <div className="overflow-hidden rounded-2xl border border-white/10 bg-gray-900 shadow-2xl shadow-black/40">
-          {/* Window chrome */}
-          <div className="flex items-center justify-between border-b border-white/5 bg-gray-900/80 px-5 py-3">
-            <div className="flex items-center gap-1.5">
-              <span className="h-3 w-3 rounded-full bg-red-500/70" />
-              <span className="h-3 w-3 rounded-full bg-yellow-500/70" />
-              <span className="h-3 w-3 rounded-full bg-green-500/70" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="flex items-center gap-1.5 text-xs text-green-400">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
-                Agent Active · Base Sepolia
-              </span>
-            </div>
-            <span className="text-xs text-gray-500">Next scan in 11m 22s</span>
-          </div>
-          {/* Verdict grid */}
-          <div className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-4">
-            {COIN_VERDICTS.map((coin) => (
-              <div
-                key={coin.symbol}
-                className={`rounded-xl border p-4 ${VERDICT_BG[coin.verdict] ?? ''}`}
-              >
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-xs font-bold">
-                    {coin.symbol.slice(0, 2)}
-                  </div>
-                  <span className="text-sm">{coin.dot}</span>
-                </div>
-                <div className="text-sm font-bold">{coin.symbol}</div>
-                <div className={`mt-0.5 font-mono text-xs font-medium ${coin.color}`}>
-                  {coin.change}
-                </div>
-                <div className="mt-1 text-[10px] font-semibold tracking-wider text-gray-500 uppercase">
-                  {coin.verdict}
-                </div>
-              </div>
-            ))}
-          </div>
-          {/* AI reasoning */}
-          <div className="border-t border-white/5 bg-purple-500/3 px-5 py-4">
-            <div className="mb-1.5 flex items-center gap-2">
-              <Brain className="h-3.5 w-3.5 text-purple-400" />
-              <span className="text-xs font-semibold text-purple-400">
-                Venice AI Priority Alert
-              </span>
-              <span className="ml-auto rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-400">
-                ARB · DANGER
-              </span>
-            </div>
-            <p className="text-xs leading-relaxed text-gray-400">
-              ARB dropped 15% following a failed governance vote and approaching token unlock.
-              Momentum clearly negative — swapping $280 to USDC now.
-            </p>
-          </div>
-        </div>
+        <LiveMockup />
       </section>
 
       {/* How it works */}
@@ -345,7 +277,7 @@ export default function LandingPage() {
               'Venice AI analysis',
               'Groq / Gemini fallback',
               'USDC or USDT swaps',
-              'Base Sepolia testnet',
+              'Ethereum Sepolia testnet',
               'No real funds at risk',
               'Open source on GitHub',
             ].map((item) => (

@@ -113,7 +113,7 @@ export default function CoinDetailPage({ params }: { params: Promise<{ symbol: s
               </div>
               <div>
                 <div className="text-xs text-gray-500">Network</div>
-                <div className="text-sm font-semibold">Base</div>
+                <div className="text-sm font-semibold">Ethereum</div>
                 <a
                   href={`${CHAIN_CONFIG.explorerUrl}/token/${coin.baseAddress}`}
                   target="_blank"

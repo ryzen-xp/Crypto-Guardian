@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useAccount } from 'wagmi'
 
 // Client-side balance type — rawBalance is a string (BigInt serialised over JSON)
@@ -62,12 +62,13 @@ export function useWalletBalances(): UseWalletBalancesResult {
     void fetchBalances()
   }, [fetchBalances])
 
-  // Derive held coins from balances
-  const heldCoins = balances
-    ? Object.values(balances)
-        .filter((b) => b.isHeld)
-        .map((b) => b.symbol)
-    : []
+  // Derive held coins from balances (memoised to prevent infinite loops in useEffects)
+  const heldCoins = useMemo(() => {
+    if (!balances) return []
+    return Object.values(balances)
+      .filter((b) => b.isHeld)
+      .map((b) => b.symbol)
+  }, [balances])
 
   return { balances, heldCoins, isLoading, error, refetch: fetchBalances }
 }

@@ -119,7 +119,7 @@ export function getBasescanUrl(txHash: string): string {
   const explorerUrl =
     typeof window !== 'undefined'
       ? (document.querySelector('meta[name="explorer-url"]')?.getAttribute('content') ??
-        'https://sepolia.basescan.org')
-      : 'https://sepolia.basescan.org'
+        'https://sepolia.etherscan.io')
+      : 'https://sepolia.etherscan.io'
   return `${explorerUrl}/tx/${txHash}`
 }

@@ -19,7 +19,7 @@ type RelayParams = {
   value?: string
   /** User's Smart Account address */
   userAddress: string
-  /** Chain ID — 8453 for Base */
+  /** Chain ID — 11155111 for Sepolia, 1 for mainnet */
   chainId: number
 }
 
@@ -112,7 +112,7 @@ export async function upgradeAccountEIP7702(walletAddress: string): Promise<stri
     },
     body: JSON.stringify({
       address: walletAddress,
-      chainId: 8453,
+      chainId: process.env.NEXT_PUBLIC_IS_TESTNET === 'true' ? 11155111 : 1,
     }),
   })
 

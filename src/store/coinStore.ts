@@ -64,7 +64,13 @@ export const useCoinStore = create<CoinStore>()(
       },
 
       setSelectedCoins: (coins) => {
-        const { coinSettings } = get()
+        const { selectedCoins, coinSettings } = get()
+        // Check if already identical to prevent infinite render loops
+        const isIdentical =
+          selectedCoins.length === coins.length &&
+          selectedCoins.every((val, index) => val === coins[index])
+        if (isIdentical) return
+
         const updatedSettings = { ...coinSettings }
         for (const symbol of coins) {
           if (!updatedSettings[symbol]) {

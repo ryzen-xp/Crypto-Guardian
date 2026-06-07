@@ -14,26 +14,17 @@ import StatsBar from '@/components/dashboard/StatsBar'
 import { useAgentStore } from '@/store/agentStore'
 import { useCoinStore } from '@/store/coinStore'
 import { cn } from '@/lib/utils'
-import { CHAIN_CONFIG, ACTIVE_CHAIN } from '@/lib/chain-config'
+import { CHAIN_CONFIG, ACTIVE_CHAIN, IS_TESTNET } from '@/lib/chain-config'
+import { MONITORED_COINS } from '@/lib/coins'
 import { useWalletBalances } from '@/hooks/useWalletBalances'
-import {
-  DEMO_PRICES,
-  DEMO_REASONING,
-  DEMO_PRIORITY_COIN,
-  DEMO_FEAR_GREED,
-  DEMO_ACTIONS,
-  DEMO_VERDICTS,
-} from '@/lib/demo-data'
 import type { AgentLoopResult, VerdictMap } from '@/lib/types'
-
-// Fallback address used only when wallet is not connected
-const DEMO_ADDRESS = '0x0000000000000000000000000000000000000001'
 
 type PriceEntry = { usd: number; usd_1h_change: number; usd_24h_change: number }
 
+const EMPTY_FEAR_GREED = { value: 0, label: '—' }
+
 export default function DashboardPage() {
   const { address, isConnected, chain } = useAccount()
-  const userAddress = address ?? DEMO_ADDRESS
   const isOnCorrectChain = chain?.id === ACTIVE_CHAIN.id
 
   // Detect which coins the wallet actually holds
@@ -64,11 +55,9 @@ export default function DashboardPage() {
 
   const { isPaused, togglePause, selectedCoins, coinSettings, selectedStablecoin } = useCoinStore()
 
-  const [prices, setPrices] = useState<Record<string, PriceEntry>>(DEMO_PRICES)
-  const [fearGreed, setFearGreed] = useState(DEMO_FEAR_GREED)
+  const [prices, setPrices] = useState<Record<string, PriceEntry>>({})
+  const [fearGreed, setFearGreed] = useState(EMPTY_FEAR_GREED)
   const [isLive, setIsLive] = useState(false)
-  const [isBooted, setIsBooted] = useState(false)
-  const [veniceWarning, setVeniceWarning] = useState<string | null>(null)
   const scanRef = useRef(false)
 
   // ── Load real market prices ────────────────────────────────────────────────
@@ -86,61 +75,47 @@ export default function DashboardPage() {
         setIsLive(true)
       }
     } catch {
-      // stay on demo prices silently
+      // prices stay empty — UI shows dashes
     }
   }, [])
 
-  // ── Boot: seed demo data + fetch real prices once ──────────────────────────
+  // ── Boot: fetch real prices immediately, start idle ────────────────────────
   useEffect(() => {
-    if (isBooted) return
-    setIsBooted(true)
-
-    // Seed demo state so dashboard is never empty
-    setVerdicts(DEMO_VERDICTS)
-    setPriorityCoin(DEMO_PRIORITY_COIN)
-    setReasoning(DEMO_REASONING)
-    setLastRunAt(new Date(Date.now() - 5 * 60 * 1000))
-    setNextRunAt(new Date(Date.now() + 10 * 60 * 1000))
-    setStatus('active')
-    addProtectedValue(730)
-    ;[...DEMO_ACTIONS].reverse().forEach((a) => addAction(a))
-
-    // Then try to get real prices
     fetchPrices()
-  }, [
-    isBooted,
-    setVerdicts,
-    setPriorityCoin,
-    setReasoning,
-    setLastRunAt,
-    setNextRunAt,
-    setStatus,
-    addAction,
-    addProtectedValue,
-    fetchPrices,
-  ])
+  }, [fetchPrices])
 
   // ── Real agent scan ────────────────────────────────────────────────────────
   const runAgentScan = useCallback(
     async (force = false) => {
+      if (!address) return // require wallet connection for real scans
       if (scanRef.current) return
       scanRef.current = true
       setStatus('running')
       setError(null)
 
+      // Priority: real on-chain holdings → manually selected → all coins (testnet fallback)
       const activeCoins =
-        isConnected && heldCoins.length > 0
-          ? heldCoins // use real on-chain holdings when wallet connected
+        heldCoins.length > 0
+          ? heldCoins // real on-chain holdings detected
           : selectedCoins.length > 0
-            ? selectedCoins // fall back to manually selected
-            : Object.keys(DEMO_VERDICTS) // fall back to demo set
+            ? selectedCoins // user manually selected coins in Setup
+            : IS_TESTNET
+              ? Object.keys(MONITORED_COINS) // testnet: scan all monitored coins by default
+              : [] // mainnet: require explicit selection
+
+      if (activeCoins.length === 0) {
+        setStatus('idle')
+        setError('No coins selected to monitor. Go to Setup to choose your coins.')
+        scanRef.current = false
+        return
+      }
 
       try {
         const res = await fetch('/api/agent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            userAddress,
+            userAddress: address,
             activeCoins,
             coinSettings,
             stablecoinSymbol: selectedStablecoin,
@@ -163,7 +138,6 @@ export default function DashboardPage() {
           setLastRunAt(new Date(d.ranAt))
           setNextRunAt(new Date(d.nextRunAt))
           setStatus('active')
-          setVeniceWarning(d.veniceWarning ?? null)
           setError(null)
 
           if (d.actionTaken) {
@@ -191,12 +165,11 @@ export default function DashboardPage() {
       }
     },
     [
+      address,
       selectedCoins,
       heldCoins,
-      isConnected,
       coinSettings,
       selectedStablecoin,
-      userAddress,
       setStatus,
       setError,
       setVerdicts,
@@ -217,12 +190,14 @@ export default function DashboardPage() {
       if (!isPaused && status === 'active' && nextRunAt && new Date() >= nextRunAt) {
         runAgentScan(true)
       }
-    }, 5000)
+    }, 1000)
     return () => clearInterval(timer)
   }, [isPaused, status, nextRunAt, runAgentScan])
 
   const currentVerdict = verdicts[priorityCoin ?? ''] ?? 'NEUTRAL'
   const priorityPrice = prices[priorityCoin ?? '']
+
+  const hasScanned = Object.keys(verdicts).length > 0
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -242,7 +217,9 @@ export default function DashboardPage() {
                     ? 'border-blue-500/30 bg-blue-500/10 text-blue-400'
                     : status === 'error'
                       ? 'border-red-500/30 bg-red-500/10 text-red-400'
-                      : 'border-green-500/30 bg-green-500/10 text-green-400'
+                      : status === 'active'
+                        ? 'border-green-500/30 bg-green-500/10 text-green-400'
+                        : 'border-gray-700/50 bg-gray-800/50 text-gray-500'
               )}
             >
               <span
@@ -254,7 +231,9 @@ export default function DashboardPage() {
                       ? 'animate-pulse bg-blue-400'
                       : status === 'error'
                         ? 'bg-red-400'
-                        : 'animate-pulse bg-green-400'
+                        : status === 'active'
+                          ? 'animate-pulse bg-green-400'
+                          : 'bg-gray-600'
                 )}
               />
               {isPaused
@@ -263,7 +242,9 @@ export default function DashboardPage() {
                   ? 'SCANNING...'
                   : status === 'error'
                     ? 'ERROR'
-                    : 'ACTIVE'}
+                    : status === 'active'
+                      ? 'ACTIVE'
+                      : 'IDLE'}
             </div>
 
             {/* Network badge */}
@@ -288,7 +269,7 @@ export default function DashboardPage() {
               ) : (
                 <>
                   <WifiOff className="h-3 w-3 text-gray-600" />
-                  Demo prices
+                  Fetching prices…
                 </>
               )}
             </span>
@@ -300,27 +281,33 @@ export default function DashboardPage() {
             {/* Held coins indicator */}
             {isConnected && !balancesLoading && heldCoins.length > 0 && (
               <span className="text-xs text-gray-500">
-                Watching:{' '}
-                <span className="font-semibold text-gray-300">{heldCoins.join(', ')}</span>
+                Detected:{' '}
+                <span className="font-semibold text-green-400">{heldCoins.join(', ')}</span>
               </span>
             )}
-            {isConnected && !balancesLoading && heldCoins.length === 0 && (
-              <span className="text-xs text-yellow-500">No monitored assets in wallet</span>
+            {isConnected && !balancesLoading && heldCoins.length === 0 && IS_TESTNET && (
+              <span className="text-xs text-blue-400">
+                Testnet: will scan all 4 coins
+              </span>
+            )}
+            {isConnected && !balancesLoading && heldCoins.length === 0 && !IS_TESTNET && (
+              <span className="text-xs text-yellow-500">No monitored assets detected</span>
             )}
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={togglePause}
-              className="flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-1.5 text-xs transition-colors hover:border-gray-500"
+              disabled={!isConnected || status === 'idle'}
+              className="flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-1.5 text-xs transition-colors hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
               {isPaused ? 'Resume' : 'Pause'}
             </button>
             <button
               onClick={() => runAgentScan(true)}
-              disabled={status === 'running' || isPaused}
-              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-blue-500 disabled:opacity-50"
+              disabled={!isConnected || status === 'running' || isPaused}
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw className={cn('h-3 w-3', status === 'running' && 'animate-spin')} />
               Run Scan Now
@@ -328,7 +315,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Hard error banner — only for real unexpected failures */}
+        {/* Hard error banner */}
         {error && (
           <div className="mb-4 flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-400" />
@@ -339,34 +326,6 @@ export default function DashboardPage() {
                 Check your network connection or API keys.
               </p>
             </div>
-          </div>
-        )}
-
-        {/* Soft warning — AI unavailable but local analysis ran fine */}
-        {!error && veniceWarning && (
-          <div className="mb-4 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-3">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-yellow-500" />
-            <p className="text-xs text-yellow-400/80">
-              {veniceWarning}{' '}
-              <a
-                href="https://console.groq.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-yellow-300"
-              >
-                Get a free Groq key
-              </a>{' '}
-              or{' '}
-              <a
-                href="https://aistudio.google.com/apikey"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-yellow-300"
-              >
-                Gemini key
-              </a>{' '}
-              to enable AI analysis without Venice credits.
-            </p>
           </div>
         )}
 
@@ -388,10 +347,10 @@ export default function DashboardPage() {
               <Brain className="h-4 w-4 text-blue-400" />
               <div>
                 <p className="text-sm font-medium text-blue-300">
-                  Connect wallet to run live scans
+                  Connect your wallet to get started
                 </p>
                 <p className="text-xs text-gray-500">
-                  Showing demo data — connect MetaMask to activate the agent.
+                  Connect MetaMask to run live AI scans and activate the agent.
                 </p>
               </div>
             </div>
@@ -428,6 +387,7 @@ export default function DashboardPage() {
               priorityCoin={priorityCoin}
               lastUpdated={lastRunAt}
               isLoading={status === 'running'}
+              hasScanned={hasScanned}
             />
           </div>
 
@@ -442,8 +402,13 @@ export default function DashboardPage() {
                 stablecoin={selectedStablecoin}
               />
             ) : (
-              <div className="flex h-full items-center justify-center rounded-xl border border-gray-800 bg-gray-900 p-6 text-center text-sm text-gray-500">
-                Click &quot;Run Scan Now&quot; to get your first AI analysis
+              <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-3 rounded-xl border border-gray-800 bg-gray-900 p-6 text-center">
+                <Brain className="h-8 w-8 text-gray-600" />
+                <p className="text-sm text-gray-500">
+                  {isConnected
+                    ? 'Click "Run Scan Now" to get your first AI analysis'
+                    : 'Connect your wallet to start monitoring'}
+                </p>
               </div>
             )}
           </div>

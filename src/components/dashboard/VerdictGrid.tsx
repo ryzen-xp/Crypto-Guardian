@@ -1,6 +1,6 @@
 'use client'
 
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Activity } from 'lucide-react'
 import { MONITORED_COINS } from '@/lib/coins'
 import { formatRelativeTime } from '@/lib/utils'
 import CoinCard from './CoinCard'
@@ -17,6 +17,7 @@ type Props = {
   priorityCoin: string | null
   lastUpdated: Date | null
   isLoading?: boolean
+  hasScanned?: boolean
 }
 
 export default function VerdictGrid({
@@ -25,6 +26,7 @@ export default function VerdictGrid({
   priorityCoin,
   lastUpdated,
   isLoading = false,
+  hasScanned = false,
 }: Props) {
   const coins = Object.values(MONITORED_COINS)
 
@@ -35,16 +37,33 @@ export default function VerdictGrid({
           <h2 className="text-lg font-semibold">Portfolio Verdicts</h2>
           <span className="flex items-center gap-1.5 text-xs text-gray-500">
             <RefreshCw className="h-3 w-3 animate-spin" />
-            Analyzing...
+            Analyzing…
           </span>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          {Array.from({ length: 10 }).map((_, i) => (
+          {Array.from({ length: coins.length }).map((_, i) => (
             <div
               key={i}
               className="h-28 animate-pulse rounded-xl border border-gray-800 bg-gray-900"
             />
           ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (!hasScanned) {
+    return (
+      <div>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Portfolio Verdicts</h2>
+          <span className="text-xs text-gray-600">Not yet scanned</span>
+        </div>
+        <div className="flex min-h-[160px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-gray-800 bg-gray-900/50 p-8 text-center">
+          <Activity className="h-8 w-8 text-gray-700" />
+          <p className="text-sm text-gray-500">
+            Run your first scan to see live AI verdicts for each coin.
+          </p>
         </div>
       </div>
     )

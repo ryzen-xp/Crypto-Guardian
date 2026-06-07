@@ -62,7 +62,7 @@ export const useAgentStore = create<AgentStore>()((set) => ({
   addProtectedValue: (usdAmount) =>
     set((state) => ({ totalProtectedUSD: state.totalProtectedUSD + usdAmount })),
 
-  setError: (error) => set({ error, status: error ? 'error' : 'idle' }),
+  setError: (error) => set((state) => ({ error, status: error ? 'error' : state.status })),
 
   resetFeed: () =>
     set({

@@ -30,6 +30,30 @@ function FearGreedBar({ value }: { value: number }) {
   )
 }
 
+import { useState, useEffect } from 'react'
+
+function CountdownTimer({ targetDate }: { targetDate: Date }) {
+  const [formatted, setFormatted] = useState('—')
+
+  useEffect(() => {
+    const update = () => {
+      // If target date has passed, show "now" or "scanning..."
+      const diff = targetDate.getTime() - Date.now()
+      if (diff <= 0) {
+        setFormatted('now')
+      } else {
+        setFormatted(formatCountdown(targetDate))
+      }
+    }
+
+    update()
+    const interval = setInterval(update, 1000)
+    return () => clearInterval(interval)
+  }, [targetDate])
+
+  return <span>{formatted}</span>
+}
+
 export default function StatsBar({ totalProtectedUSD, totalSwaps, nextRunAt, fearGreed }: Props) {
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -57,7 +81,7 @@ export default function StatsBar({ totalProtectedUSD, totalSwaps, nextRunAt, fea
           Next Scan
         </div>
         <div className="font-mono text-xl font-bold text-yellow-400">
-          {nextRunAt ? formatCountdown(nextRunAt) : '—'}
+          {nextRunAt ? <CountdownTimer targetDate={new Date(nextRunAt)} /> : '—'}
         </div>
       </div>
 

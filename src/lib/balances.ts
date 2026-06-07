@@ -1,16 +1,19 @@
 /**
  * On-chain balance fetching for the monitored coins.
  *
- * Uses the public Base RPC — no API key required.
- * Returns balances in USD value using CoinGecko prices.
+ * Uses the configured RPC — no API key required.
+ * Returns balances in human-readable units.
  *
  * A coin is considered "held" if:
- *   - ETH/WETH: native balance > 0.001 ETH
- *   - ERC20: token balance > minimum threshold (dust filter)
+ *   - ETH: native balance > 0.0001 ETH  (very low threshold — any Sepolia faucet amount qualifies)
+ *   - ERC20: token balance > dust threshold
+ *
+ * On testnet, ERC20 contracts may not be deployed or may fail —
+ * those coins are silently marked as not held (isHeld: false).
  */
 
 import { createPublicClient, http, formatUnits } from 'viem'
-import { baseSepolia, base } from 'wagmi/chains'
+import { sepolia, mainnet } from 'wagmi/chains'
 import { MONITORED_COINS } from './coins'
 import { IS_TESTNET } from './chain-config'
 
@@ -26,12 +29,20 @@ const ERC20_ABI = [
 ] as const
 
 // Dust thresholds — below this we consider the wallet as NOT holding the asset
-const DUST_THRESHOLDS: Record<string, number> = {
-  ETH: 0.001, // 0.001 ETH
-  WBTC: 0.00001, // ~$0.60 at $60k
-  ARB: 1.0, // 1 ARB
-  OP: 1.0, // 1 OP
-}
+// Testnet thresholds are very low — faucet drips are tiny
+const DUST_THRESHOLDS: Record<string, number> = IS_TESTNET
+  ? {
+      ETH: 0.0001, // any Sepolia faucet amount (usually 0.1–0.5 ETH)
+      WBTC: 0.000001,
+      ARB: 0.01,
+      OP: 0.01,
+    }
+  : {
+      ETH: 0.001,
+      WBTC: 0.00001,
+      ARB: 1.0,
+      OP: 1.0,
+    }
 
 export type WalletBalance = {
   symbol: string
@@ -48,10 +59,10 @@ export type WalletBalances = Record<string, WalletBalance>
  * Called from the API route — server-side only.
  */
 export async function fetchWalletBalances(walletAddress: string): Promise<WalletBalances> {
-  const chain = IS_TESTNET ? baseSepolia : base
+  const chain = IS_TESTNET ? sepolia : mainnet
   const rpcUrl =
     process.env.NEXT_PUBLIC_RPC_URL ??
-    (IS_TESTNET ? 'https://sepolia.base.org' : 'https://mainnet.base.org')
+    (IS_TESTNET ? 'https://ethereum-sepolia-rpc.publicnode.com' : 'https://eth.llamarpc.com')
 
   const client = createPublicClient({
     chain,
@@ -67,12 +78,12 @@ export async function fetchWalletBalances(walletAddress: string): Promise<Wallet
         let rawBalance: bigint
 
         if (coin.symbol === 'ETH') {
-          // Native ETH balance
+          // Native ETH balance — always works on any EVM chain
           rawBalance = await client.getBalance({
             address: walletAddress as `0x${string}`,
           })
         } else {
-          // ERC20 balance
+          // ERC20 balance — may fail on testnet if contract not deployed
           rawBalance = (await client.readContract({
             address: coin.baseAddress as `0x${string}`,
             abi: ERC20_ABI,
@@ -82,7 +93,7 @@ export async function fetchWalletBalances(walletAddress: string): Promise<Wallet
         }
 
         const formatted = parseFloat(formatUnits(rawBalance, coin.decimals))
-        const dustThreshold = DUST_THRESHOLDS[coin.symbol] ?? 0.01
+        const dustThreshold = DUST_THRESHOLDS[coin.symbol] ?? 0.001
         const isHeld = formatted > dustThreshold
 
         results[coin.symbol] = {
@@ -92,9 +103,11 @@ export async function fetchWalletBalances(walletAddress: string): Promise<Wallet
           formatted,
           isHeld,
         }
-      } catch {
-        // If balance check fails (wrong network, contract not deployed on testnet, etc.)
-        // mark as not held rather than crashing
+      } catch (err) {
+        console.error(`[fetchWalletBalances] Error fetching ${coin.symbol} for ${walletAddress}:`, err)
+        // If balance check fails (contract not deployed on testnet, etc.)
+        // mark as not held rather than crashing — this is expected on Sepolia
+        // for WBTC, ARB, OP which rarely have real testnet deployments
         results[coin.symbol] = {
           symbol: coin.symbol,
           rawBalance: BigInt(0),
