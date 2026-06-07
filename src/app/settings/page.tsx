@@ -2,6 +2,8 @@
 
 import { Shield, Pause, Play, Check } from 'lucide-react'
 import Header from '@/components/layout/Header'
+
+export const dynamic = 'force-dynamic'
 import { MONITORED_COINS, STABLECOINS } from '@/lib/coins'
 import { useCoinStore } from '@/store/coinStore'
 import { cn } from '@/lib/utils'

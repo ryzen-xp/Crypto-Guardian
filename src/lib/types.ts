@@ -90,6 +90,8 @@ export type AgentLoopResult = {
   nextRunAt: Date
   ranAt: Date
   stablecoinUsed: string
+  /** Set when Venice was unavailable and local analysis was used instead */
+  veniceWarning?: string
 }
 
 // ─── Venice AI ───────────────────────────────────────────────────────────────

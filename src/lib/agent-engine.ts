@@ -63,7 +63,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   )
   const newsSnippets = await fetchAllCoinNews(activeCoins, coinNames)
 
-  // ── Step 3: Venice AI analysis ────────────────────────────────────────────
+  // ── Step 3: Venice AI analysis (falls back to local analyser automatically) ──
   const analysis = await analyzeMarket({
     prices: marketSnapshot.prices,
     fearGreed: marketSnapshot.fearGreed,
@@ -71,6 +71,19 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     activeCoins,
     userSettings: coinSettings,
   })
+
+  // Detect if local analyser was used (rawResponse contains the marker)
+  const usedLocalAnalyser = analysis.rawResponse.includes('local-analyser')
+  const providerMatch = analysis.rawResponse.match(/\[provider:([^\]]+)\]/)
+  const providerUsed = providerMatch?.[1] ?? null
+
+  let veniceWarning: string | undefined
+  if (usedLocalAnalyser) {
+    veniceWarning =
+      'All AI providers unavailable — verdicts calculated from price momentum and Fear & Greed index.'
+  } else if (providerUsed && providerUsed !== 'Venice AI') {
+    veniceWarning = `Venice AI unavailable — analysis provided by ${providerUsed} (free tier).`
+  }
 
   // ── Step 4: Check rules for priority coin ─────────────────────────────────
   const prioritySymbol = analysis.priorityCoin
@@ -125,6 +138,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     nextRunAt: getNextRunAt(),
     ranAt: lastRunAt,
     stablecoinUsed: stablecoinSymbol,
+    veniceWarning,
   }
 }
 

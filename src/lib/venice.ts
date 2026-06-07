@@ -1,9 +1,20 @@
+/**
+ * AI Analysis Module — Multi-Provider with Automatic Fallback
+ *
+ * Priority chain:
+ *   1. Venice AI  (llama-3.3-70b + web search) — primary, best quality
+ *   2. Groq       (llama-3.3-70b, free tier, no credit card) — fast fallback
+ *   3. Gemini     (gemini-2.0-flash, free tier, no credit card) — secondary fallback
+ *   4. Local      (rule-based, price momentum + Fear & Greed) — always works
+ *
+ * Get free API keys:
+ *   Groq:   https://console.groq.com  (free, no card, 14,400 req/day)
+ *   Gemini: https://aistudio.google.com/apikey  (free, no card, 1,000 req/day)
+ */
+
 import type { AnalysisResult, MarketContext, Verdict } from './types'
 
-const VENICE_API_URL = 'https://api.venice.ai/api/v1/chat/completions'
-const VENICE_MODEL = 'llama-3.3-70b'
-
-// ─── System Prompt ────────────────────────────────────────────────────────────
+// ─── Shared system prompt ─────────────────────────────────────────────────────
 
 const ANALYST_SYSTEM_PROMPT = `You are a senior crypto risk analyst with 15 years experience watching volatile markets. You monitor multiple EVM coins simultaneously like a trading desk.
 
@@ -26,19 +37,74 @@ Rules:
 - Fear & Greed below 20 amplifies DANGER signals, above 80 amplifies CAUTION on pumps
 - Return ONLY valid JSON matching the schema. No text outside the JSON object.`
 
-// ─── Venice API Client ────────────────────────────────────────────────────────
+// ─── Provider definitions ─────────────────────────────────────────────────────
 
-function getApiKey(): string {
-  const key = process.env.VENICE_API_KEY
-  if (!key) throw new Error('VENICE_API_KEY environment variable is not set')
-  return key
+type Provider = {
+  name: string
+  envKey: string
+  url: string
+  model: string
+  /** Whether this provider uses OpenAI-compatible /chat/completions format */
+  openAICompat: boolean
+  /** Gemini uses a different API shape */
+  isGemini?: boolean
+  /** Whether this provider supports web_search tool */
+  supportsWebSearch: boolean
 }
 
-async function veniceRequest(body: Record<string, unknown>): Promise<string> {
-  const res = await fetch(VENICE_API_URL, {
+const PROVIDERS: Provider[] = [
+  {
+    name: 'Venice AI',
+    envKey: 'VENICE_API_KEY',
+    url: 'https://api.venice.ai/api/v1/chat/completions',
+    model: 'llama-3.3-70b',
+    openAICompat: true,
+    supportsWebSearch: true,
+  },
+  {
+    name: 'Groq',
+    envKey: 'GROQ_API_KEY',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
+    model: 'llama-3.3-70b-versatile',
+    openAICompat: true,
+    supportsWebSearch: false,
+  },
+  {
+    name: 'Gemini',
+    envKey: 'GEMINI_API_KEY',
+    url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+    model: 'gemini-2.0-flash',
+    openAICompat: false,
+    isGemini: true,
+    supportsWebSearch: false,
+  },
+]
+
+// ─── HTTP helpers ─────────────────────────────────────────────────────────────
+
+/** Make an OpenAI-compatible chat completion request */
+async function openAICompatRequest(
+  provider: Provider,
+  apiKey: string,
+  messages: Array<{ role: string; content: string }>,
+  options?: { tools?: unknown[]; tool_choice?: string; temperature?: number; max_tokens?: number }
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    model: provider.model,
+    messages,
+    temperature: options?.temperature ?? 0.3,
+    max_tokens: options?.max_tokens ?? 600,
+  }
+
+  if (options?.tools) {
+    body['tools'] = options.tools
+    body['tool_choice'] = options.tool_choice ?? 'auto'
+  }
+
+  const res = await fetch(provider.url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${getApiKey()}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -46,7 +112,9 @@ async function veniceRequest(body: Record<string, unknown>): Promise<string> {
 
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Venice API error ${res.status}: ${text}`)
+    const err = new Error(`${provider.name} error ${res.status}: ${text}`)
+    ;(err as Error & { status: number }).status = res.status
+    throw err
   }
 
   const data = (await res.json()) as {
@@ -54,47 +122,111 @@ async function veniceRequest(body: Record<string, unknown>): Promise<string> {
   }
 
   const content = data.choices[0]?.message?.content
-  if (!content) throw new Error('Venice returned empty response')
-
+  if (!content) throw new Error(`${provider.name} returned empty response`)
   return content
 }
 
-// ─── Web Search Call ──────────────────────────────────────────────────────────
+/** Make a Gemini generateContent request */
+async function geminiRequest(
+  provider: Provider,
+  apiKey: string,
+  messages: Array<{ role: string; content: string }>
+): Promise<string> {
+  // Gemini uses a different message structure
+  const contents = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }))
 
-/**
- * Searches Venice for latest news on a specific coin.
- * Returns a brief summary string.
- */
+  // Prepend system prompt as first user message for Gemini
+  const systemMsg = messages.find((m) => m.role === 'system')
+  if (systemMsg) {
+    contents.unshift({ role: 'user', parts: [{ text: systemMsg.content }] })
+    // Gemini needs alternating roles, so add a model ack
+    contents.splice(1, 0, {
+      role: 'model',
+      parts: [{ text: 'Understood. I will analyze the market data and return only valid JSON.' }],
+    })
+  }
+
+  const url = `${provider.url}?key=${apiKey}`
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents,
+      generationConfig: { temperature: 0.3, maxOutputTokens: 600 },
+    }),
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    const err = new Error(`Gemini error ${res.status}: ${text}`)
+    ;(err as Error & { status: number }).status = res.status
+    throw err
+  }
+
+  const data = (await res.json()) as {
+    candidates: Array<{ content: { parts: Array<{ text: string }> } }>
+  }
+
+  const text = data.candidates[0]?.content?.parts[0]?.text
+  if (!text) throw new Error('Gemini returned empty response')
+  return text
+}
+
+/** Unified request dispatcher */
+async function callProvider(
+  provider: Provider,
+  messages: Array<{ role: string; content: string }>,
+  options?: { tools?: unknown[]; tool_choice?: string; temperature?: number; max_tokens?: number }
+): Promise<string> {
+  const apiKey = process.env[provider.envKey]
+  if (!apiKey) throw new Error(`${provider.name}: ${provider.envKey} not configured`)
+
+  if (provider.isGemini) {
+    return geminiRequest(provider, apiKey, messages)
+  }
+  return openAICompatRequest(provider, apiKey, messages, options)
+}
+
+// ─── Venice web search (best effort only) ────────────────────────────────────
+
 export async function searchCoinNews(coinSymbol: string, coinName: string): Promise<string> {
+  const venice = PROVIDERS[0]! // Venice is always index 0
+  const apiKey = process.env[venice.envKey]
+  if (!apiKey) return `No recent news found for ${coinSymbol}.`
+
   try {
-    const content = await veniceRequest({
-      model: VENICE_MODEL,
-      tools: [{ type: 'web_search' }],
-      tool_choice: 'auto',
-      max_tokens: 200,
-      messages: [
+    const content = await openAICompatRequest(
+      venice,
+      apiKey,
+      [
         {
           role: 'user',
           content: `Search for: latest crypto news and price action for ${coinName} (${coinSymbol}) in the last 1 hour. Focus on major price movements, hacks, protocol news, partnerships, regulatory news. Summarize in 2-3 sentences.`,
         },
       ],
-    })
-
+      {
+        tools: [{ type: 'web_search' }],
+        tool_choice: 'auto',
+        max_tokens: 200,
+      }
+    )
     return content.trim()
   } catch {
-    // Graceful fallback — don't let one coin's news failure kill the whole loop
+    // News search is best-effort — never block the main analysis
     return `No recent news found for ${coinSymbol}.`
   }
 }
 
-/**
- * Fetch news for all active coins in parallel (rate-limited to avoid hammering Venice).
- */
 export async function fetchAllCoinNews(
   activeCoins: string[],
   coinNames: Record<string, string>
 ): Promise<Record<string, string>> {
-  // Process in batches of 3 to respect rate limits
   const batchSize = 3
   const results: Record<string, string> = {}
 
@@ -111,28 +243,176 @@ export async function fetchAllCoinNews(
   return results
 }
 
-// ─── Analysis Call ────────────────────────────────────────────────────────────
+// ─── Main analysis — cascades through all providers ──────────────────────────
 
-/**
- * Main analysis call — sends all market data and gets verdicts back.
- */
 export async function analyzeMarket(context: MarketContext): Promise<AnalysisResult> {
-  const userMessage = buildAnalysisMessage(context)
+  const messages = [
+    { role: 'system', content: ANALYST_SYSTEM_PROMPT },
+    { role: 'user', content: buildAnalysisMessage(context) },
+  ]
 
-  const rawResponse = await veniceRequest({
-    model: VENICE_MODEL,
-    temperature: 0.3,
-    max_tokens: 600,
-    messages: [
-      { role: 'system', content: ANALYST_SYSTEM_PROMPT },
-      { role: 'user', content: userMessage },
-    ],
-  })
+  const errors: string[] = []
 
-  return parseVeniceResponse(rawResponse, context.activeCoins)
+  for (const provider of PROVIDERS) {
+    const apiKey = process.env[provider.envKey]
+    if (!apiKey) {
+      errors.push(`${provider.name}: key not configured (${provider.envKey})`)
+      continue
+    }
+
+    try {
+      console.warn(`[ai] Trying ${provider.name}...`)
+      const raw = await callProvider(provider, messages, { temperature: 0.3, max_tokens: 600 })
+      const result = parseAIResponse(raw, context.activeCoins)
+
+      console.warn(`[ai] Success with ${provider.name}`)
+      return {
+        ...result,
+        rawResponse: `[provider:${provider.name}] ${raw}`,
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(`${provider.name}: ${msg}`)
+      console.warn(`[ai] ${provider.name} failed — ${msg}`)
+      // Continue to next provider
+    }
+  }
+
+  // All AI providers failed — use local rule-based analyser
+  console.warn('[ai] All providers failed — using local analyser. Errors:', errors)
+  return localAnalyser(context, errors)
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Response parser (works for all providers) ────────────────────────────────
+
+function parseAIResponse(raw: string, activeCoins: string[]): AnalysisResult {
+  const cleaned = raw
+    .replace(/```json\n?/g, '')
+    .replace(/```\n?/g, '')
+    .trim()
+
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(cleaned) as Record<string, unknown>
+  } catch {
+    throw new Error(`Invalid JSON: ${cleaned.slice(0, 200)}`)
+  }
+
+  if (!parsed['verdicts'] || !parsed['priority_coin'] || !parsed['reasoning']) {
+    throw new Error(`Missing required fields: ${JSON.stringify(Object.keys(parsed))}`)
+  }
+
+  const validVerdicts: Verdict[] = ['DANGER', 'CAUTION', 'NEUTRAL', 'OPPORTUNITY']
+  const verdicts = parsed['verdicts'] as Record<string, string>
+
+  for (const symbol of activeCoins) {
+    if (!(symbol in verdicts)) verdicts[symbol] = 'NEUTRAL'
+  }
+
+  for (const [coin, verdict] of Object.entries(verdicts)) {
+    if (!validVerdicts.includes(verdict as Verdict)) {
+      console.warn(`Invalid verdict for ${coin}: ${verdict} — defaulting to NEUTRAL`)
+      verdicts[coin] = 'NEUTRAL'
+    }
+  }
+
+  return {
+    verdicts: verdicts as Record<string, Verdict>,
+    priorityCoin: parsed['priority_coin'] as string,
+    priorityAction: (parsed['priority_action'] as 'BUY' | 'SELL' | 'HOLD') ?? 'HOLD',
+    reasoning: parsed['reasoning'] as string,
+    confidence: (parsed['confidence'] as 'HIGH' | 'MEDIUM' | 'LOW') ?? 'MEDIUM',
+    rawResponse: raw,
+  }
+}
+
+// ─── Local rule-based analyser (no AI, no network) ───────────────────────────
+
+function localAnalyser(context: MarketContext, providerErrors: string[]): AnalysisResult {
+  const { prices, fearGreed, activeCoins } = context
+  const verdicts: Record<string, Verdict> = {}
+  const scores: Record<string, number> = {}
+
+  for (const symbol of activeCoins) {
+    const p = prices[symbol]
+    if (!p) {
+      verdicts[symbol] = 'NEUTRAL'
+      scores[symbol] = 0
+      continue
+    }
+
+    const { usd_1h_change: h1, usd_24h_change: h24 } = p
+    const fg = fearGreed.value
+    let score = 0
+
+    // 1h momentum (strongest signal)
+    if (h1 <= -8) score -= 4
+    else if (h1 <= -5) score -= 3
+    else if (h1 <= -3) score -= 2
+    else if (h1 <= -1) score -= 1
+    else if (h1 >= 8) score += 4
+    else if (h1 >= 5) score += 3
+    else if (h1 >= 3) score += 2
+    else if (h1 >= 1) score += 1
+
+    // 24h trend confirmation
+    if (h24 <= -12) score -= 2
+    else if (h24 <= -6) score -= 1
+    else if (h24 >= 12) score += 2
+    else if (h24 >= 6) score += 1
+
+    // Fear & Greed amplifier
+    if (fg <= 20 && score < 0) score -= 2
+    if (fg <= 25 && score < 0) score -= 1
+    if (fg >= 80 && score > 0) score -= 1
+
+    scores[symbol] = score
+    if (score <= -5) verdicts[symbol] = 'DANGER'
+    else if (score <= -2) verdicts[symbol] = 'CAUTION'
+    else if (score >= 4) verdicts[symbol] = 'OPPORTUNITY'
+    else verdicts[symbol] = 'NEUTRAL'
+  }
+
+  const priorityCoin =
+    activeCoins.reduce((worst, sym) => {
+      const ws = scores[worst] ?? 0
+      const cs = scores[sym] ?? 0
+      return Math.abs(cs) > Math.abs(ws) ? sym : worst
+    }, activeCoins[0] ?? 'ETH') ?? 'ETH'
+
+  const priorityScore = scores[priorityCoin] ?? 0
+  const priorityAction: 'BUY' | 'SELL' | 'HOLD' =
+    priorityScore <= -2 ? 'SELL' : priorityScore >= 4 ? 'BUY' : 'HOLD'
+  const priorityVerdict = verdicts[priorityCoin] ?? 'NEUTRAL'
+  const coinPrice = prices[priorityCoin]
+  const h1 = coinPrice?.usd_1h_change?.toFixed(2) ?? '0'
+  const h24 = coinPrice?.usd_24h_change?.toFixed(2) ?? '0'
+
+  const verdictPhrases: Record<Verdict, string> = {
+    DANGER: `${priorityCoin} is showing significant downside momentum (${h1}% in 1h, ${h24}% in 24h) with Fear & Greed at ${fearGreed.value} (${fearGreed.label}). Capital protection recommended.`,
+    CAUTION: `${priorityCoin} is showing early warning signals (${h1}% in 1h) with market sentiment at ${fearGreed.label} (${fearGreed.value}). Monitor closely and consider reducing exposure.`,
+    OPPORTUNITY: `${priorityCoin} is displaying strong positive momentum (${h1}% in 1h, ${h24}% in 24h) with market sentiment at ${fearGreed.label} (${fearGreed.value}). Momentum indicators support adding to position.`,
+    NEUTRAL: `${priorityCoin} is within normal range (${h1}% in 1h, ${h24}% in 24h) with Fear & Greed at ${fearGreed.value} (${fearGreed.label}). No action required — continue holding.`,
+  }
+
+  const reasoning =
+    `[Local price analysis — all AI providers unavailable] ` +
+    (verdictPhrases[priorityVerdict] ?? verdictPhrases['NEUTRAL'])
+
+  return {
+    verdicts,
+    priorityCoin,
+    priorityAction,
+    reasoning,
+    confidence: 'MEDIUM',
+    rawResponse: JSON.stringify({
+      source: 'local-analyser',
+      errors: providerErrors,
+    }),
+  }
+}
+
+// ─── Prompt builder ───────────────────────────────────────────────────────────
 
 function buildAnalysisMessage(context: MarketContext): string {
   const { prices, fearGreed, newsSnippets, activeCoins, userSettings } = context
@@ -181,49 +461,12 @@ Return your analysis as JSON matching this exact schema:
 }`
 }
 
-function parseVeniceResponse(raw: string, activeCoins: string[]): AnalysisResult {
-  // Strip markdown code fences if present
-  const cleaned = raw
-    .replace(/```json\n?/g, '')
-    .replace(/```\n?/g, '')
-    .trim()
+// ─── Status helpers ───────────────────────────────────────────────────────────
 
-  let parsed: Record<string, unknown>
-  try {
-    parsed = JSON.parse(cleaned) as Record<string, unknown>
-  } catch {
-    throw new Error(`Venice returned invalid JSON: ${cleaned.slice(0, 200)}`)
-  }
+export function getConfiguredProviders(): string[] {
+  return PROVIDERS.filter((p) => Boolean(process.env[p.envKey])).map((p) => p.name)
+}
 
-  // Validate required fields
-  if (!parsed['verdicts'] || !parsed['priority_coin'] || !parsed['reasoning']) {
-    throw new Error(`Venice response missing required fields: ${JSON.stringify(parsed)}`)
-  }
-
-  const validVerdicts: Verdict[] = ['DANGER', 'CAUTION', 'NEUTRAL', 'OPPORTUNITY']
-  const verdicts = parsed['verdicts'] as Record<string, string>
-
-  // Fill in NEUTRAL for any missing active coins
-  for (const symbol of activeCoins) {
-    if (!(symbol in verdicts)) {
-      verdicts[symbol] = 'NEUTRAL'
-    }
-  }
-
-  // Validate verdict values
-  for (const [coin, verdict] of Object.entries(verdicts)) {
-    if (!validVerdicts.includes(verdict as Verdict)) {
-      console.warn(`Invalid verdict for ${coin}: ${verdict}, defaulting to NEUTRAL`)
-      verdicts[coin] = 'NEUTRAL'
-    }
-  }
-
-  return {
-    verdicts: verdicts as Record<string, Verdict>,
-    priorityCoin: parsed['priority_coin'] as string,
-    priorityAction: (parsed['priority_action'] as 'BUY' | 'SELL' | 'HOLD') ?? 'HOLD',
-    reasoning: parsed['reasoning'] as string,
-    confidence: (parsed['confidence'] as 'HIGH' | 'MEDIUM' | 'LOW') ?? 'MEDIUM',
-    rawResponse: raw,
-  }
+export function isVeniceConfigured(): boolean {
+  return Boolean(process.env.VENICE_API_KEY)
 }

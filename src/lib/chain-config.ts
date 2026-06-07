@@ -37,3 +37,13 @@ export function getTxUrl(txHash: string): string {
 export function getTokenUrl(address: string): string {
   return `${CHAIN_CONFIG.explorerUrl}/token/${address}`
 }
+
+/**
+ * ACTIVE_CHAIN — the numeric chain ID object used for wagmi chain checks.
+ * Mirrors what wagmi.ts exports, but usable in server + client code without
+ * importing from wagmi/chains (which would pull in heavy client-only code).
+ */
+export const ACTIVE_CHAIN = {
+  id: CHAIN_CONFIG.id,
+  name: CHAIN_CONFIG.name,
+} as const

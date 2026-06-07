@@ -1,7 +1,11 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Play, RefreshCw, Pause, AlertTriangle, Wifi, WifiOff } from 'lucide-react'
+import { useAccount } from 'wagmi'
+import { ConnectButton } from '@rainbow-me/rainbowkit'
+
+export const dynamic = 'force-dynamic'
+import { Play, RefreshCw, Pause, AlertTriangle, Wifi, WifiOff, Brain } from 'lucide-react'
 import Header from '@/components/layout/Header'
 import VerdictGrid from '@/components/dashboard/VerdictGrid'
 import PriorityCoin from '@/components/dashboard/PriorityCoin'
@@ -10,7 +14,8 @@ import StatsBar from '@/components/dashboard/StatsBar'
 import { useAgentStore } from '@/store/agentStore'
 import { useCoinStore } from '@/store/coinStore'
 import { cn } from '@/lib/utils'
-import { CHAIN_CONFIG } from '@/lib/chain-config'
+import { CHAIN_CONFIG, ACTIVE_CHAIN } from '@/lib/chain-config'
+import { useWalletBalances } from '@/hooks/useWalletBalances'
 import {
   DEMO_PRICES,
   DEMO_REASONING,
@@ -21,12 +26,18 @@ import {
 } from '@/lib/demo-data'
 import type { AgentLoopResult, VerdictMap } from '@/lib/types'
 
-// Placeholder address used when no wallet is connected
+// Fallback address used only when wallet is not connected
 const DEMO_ADDRESS = '0x0000000000000000000000000000000000000001'
 
 type PriceEntry = { usd: number; usd_1h_change: number; usd_24h_change: number }
 
 export default function DashboardPage() {
+  const { address, isConnected, chain } = useAccount()
+  const userAddress = address ?? DEMO_ADDRESS
+  const isOnCorrectChain = chain?.id === ACTIVE_CHAIN.id
+
+  // Detect which coins the wallet actually holds
+  const { heldCoins, isLoading: balancesLoading } = useWalletBalances()
   const {
     status,
     verdicts,
@@ -57,6 +68,7 @@ export default function DashboardPage() {
   const [fearGreed, setFearGreed] = useState(DEMO_FEAR_GREED)
   const [isLive, setIsLive] = useState(false)
   const [isBooted, setIsBooted] = useState(false)
+  const [veniceWarning, setVeniceWarning] = useState<string | null>(null)
   const scanRef = useRef(false)
 
   // ── Load real market prices ────────────────────────────────────────────────
@@ -116,14 +128,19 @@ export default function DashboardPage() {
       setStatus('running')
       setError(null)
 
-      const activeCoins = selectedCoins.length > 0 ? selectedCoins : Object.keys(DEMO_VERDICTS)
+      const activeCoins =
+        isConnected && heldCoins.length > 0
+          ? heldCoins // use real on-chain holdings when wallet connected
+          : selectedCoins.length > 0
+            ? selectedCoins // fall back to manually selected
+            : Object.keys(DEMO_VERDICTS) // fall back to demo set
 
       try {
         const res = await fetch('/api/agent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            userAddress: DEMO_ADDRESS,
+            userAddress,
             activeCoins,
             coinSettings,
             stablecoinSymbol: selectedStablecoin,
@@ -146,6 +163,8 @@ export default function DashboardPage() {
           setLastRunAt(new Date(d.ranAt))
           setNextRunAt(new Date(d.nextRunAt))
           setStatus('active')
+          setVeniceWarning(d.veniceWarning ?? null)
+          setError(null)
 
           if (d.actionTaken) {
             addAction({
@@ -173,8 +192,11 @@ export default function DashboardPage() {
     },
     [
       selectedCoins,
+      heldCoins,
+      isConnected,
       coinSettings,
       selectedStablecoin,
+      userAddress,
       setStatus,
       setError,
       setVerdicts,
@@ -274,6 +296,17 @@ export default function DashboardPage() {
             <span className="text-xs text-gray-500">
               Safe asset: <span className="font-semibold text-gray-300">{selectedStablecoin}</span>
             </span>
+
+            {/* Held coins indicator */}
+            {isConnected && !balancesLoading && heldCoins.length > 0 && (
+              <span className="text-xs text-gray-500">
+                Watching:{' '}
+                <span className="font-semibold text-gray-300">{heldCoins.join(', ')}</span>
+              </span>
+            )}
+            {isConnected && !balancesLoading && heldCoins.length === 0 && (
+              <span className="text-xs text-yellow-500">No monitored assets in wallet</span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -295,7 +328,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Error banner */}
+        {/* Hard error banner — only for real unexpected failures */}
         {error && (
           <div className="mb-4 flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-400" />
@@ -303,9 +336,37 @@ export default function DashboardPage() {
               <p className="text-sm font-medium text-red-400">Agent scan failed</p>
               <p className="mt-1 font-mono text-xs text-red-400/70">{error}</p>
               <p className="mt-1 text-xs text-gray-500">
-                Venice AI or CoinGecko may be unavailable. Showing last known verdicts.
+                Check your network connection or API keys.
               </p>
             </div>
+          </div>
+        )}
+
+        {/* Soft warning — AI unavailable but local analysis ran fine */}
+        {!error && veniceWarning && (
+          <div className="mb-4 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-3">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-yellow-500" />
+            <p className="text-xs text-yellow-400/80">
+              {veniceWarning}{' '}
+              <a
+                href="https://console.groq.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-yellow-300"
+              >
+                Get a free Groq key
+              </a>{' '}
+              or{' '}
+              <a
+                href="https://aistudio.google.com/apikey"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-yellow-300"
+              >
+                Gemini key
+              </a>{' '}
+              to enable AI analysis without Venice credits.
+            </p>
           </div>
         )}
 
@@ -317,21 +378,34 @@ export default function DashboardPage() {
             </span>
             Running on {CHAIN_CONFIG.name}. Prices are real (CoinGecko). Swaps are simulated — no
             real funds at risk.
-            {CHAIN_CONFIG.faucetUrl && (
-              <>
-                {' '}
-                Get test ETH at{' '}
-                <a
-                  href={CHAIN_CONFIG.faucetUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline"
-                >
-                  Alchemy Faucet
-                </a>
-                .
-              </>
-            )}
+          </div>
+        )}
+
+        {/* Wallet connect prompt */}
+        {!isConnected && (
+          <div className="mb-4 flex items-center justify-between rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+            <div className="flex items-center gap-3">
+              <Brain className="h-4 w-4 text-blue-400" />
+              <div>
+                <p className="text-sm font-medium text-blue-300">
+                  Connect wallet to run live scans
+                </p>
+                <p className="text-xs text-gray-500">
+                  Showing demo data — connect MetaMask to activate the agent.
+                </p>
+              </div>
+            </div>
+            <ConnectButton label="Connect" />
+          </div>
+        )}
+
+        {/* Wrong chain warning */}
+        {isConnected && !isOnCorrectChain && (
+          <div className="mb-4 flex items-center gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0 text-yellow-400" />
+            <p className="text-sm text-yellow-300">
+              Wrong network. Switch to <strong>{CHAIN_CONFIG.name}</strong> to run scans.
+            </p>
           </div>
         )}
 
