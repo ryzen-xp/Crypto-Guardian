@@ -278,9 +278,10 @@ export async function analyzeMarket(context: MarketContext): Promise<AnalysisRes
     }
   }
 
-  // All AI providers failed — use local rule-based analyser
-  console.warn('[ai] All providers failed — using local analyser. Errors:', errors)
-  return localAnalyser(context, errors)
+  // All AI providers failed — throw exception
+  throw new Error(
+    `Market analysis failed. All AI providers (Venice, Groq, Gemini) are currently unavailable or returned invalid signatures. Errors:\n- ${errors.join('\n- ')}`
+  )
 }
 
 // ─── Response parser (works for all providers) ────────────────────────────────
@@ -326,91 +327,7 @@ function parseAIResponse(raw: string, activeCoins: string[]): AnalysisResult {
   }
 }
 
-// ─── Local rule-based analyser (no AI, no network) ───────────────────────────
-
-function localAnalyser(context: MarketContext, providerErrors: string[]): AnalysisResult {
-  const { prices, fearGreed, activeCoins } = context
-  const verdicts: Record<string, Verdict> = {}
-  const scores: Record<string, number> = {}
-
-  for (const symbol of activeCoins) {
-    const p = prices[symbol]
-    if (!p) {
-      verdicts[symbol] = 'NEUTRAL'
-      scores[symbol] = 0
-      continue
-    }
-
-    const { usd_1h_change: h1, usd_24h_change: h24 } = p
-    const fg = fearGreed.value
-    let score = 0
-
-    // 1h momentum (strongest signal)
-    if (h1 <= -8) score -= 4
-    else if (h1 <= -5) score -= 3
-    else if (h1 <= -3) score -= 2
-    else if (h1 <= -1) score -= 1
-    else if (h1 >= 8) score += 4
-    else if (h1 >= 5) score += 3
-    else if (h1 >= 3) score += 2
-    else if (h1 >= 1) score += 1
-
-    // 24h trend confirmation
-    if (h24 <= -12) score -= 2
-    else if (h24 <= -6) score -= 1
-    else if (h24 >= 12) score += 2
-    else if (h24 >= 6) score += 1
-
-    // Fear & Greed amplifier
-    if (fg <= 20 && score < 0) score -= 2
-    if (fg <= 25 && score < 0) score -= 1
-    if (fg >= 80 && score > 0) score -= 1
-
-    scores[symbol] = score
-    if (score <= -5) verdicts[symbol] = 'DANGER'
-    else if (score <= -2) verdicts[symbol] = 'CAUTION'
-    else if (score >= 4) verdicts[symbol] = 'OPPORTUNITY'
-    else verdicts[symbol] = 'NEUTRAL'
-  }
-
-  const priorityCoin =
-    activeCoins.reduce((worst, sym) => {
-      const ws = scores[worst] ?? 0
-      const cs = scores[sym] ?? 0
-      return Math.abs(cs) > Math.abs(ws) ? sym : worst
-    }, activeCoins[0] ?? 'ETH') ?? 'ETH'
-
-  const priorityScore = scores[priorityCoin] ?? 0
-  const priorityAction: 'BUY' | 'SELL' | 'HOLD' =
-    priorityScore <= -2 ? 'SELL' : priorityScore >= 4 ? 'BUY' : 'HOLD'
-  const priorityVerdict = verdicts[priorityCoin] ?? 'NEUTRAL'
-  const coinPrice = prices[priorityCoin]
-  const h1 = coinPrice?.usd_1h_change?.toFixed(2) ?? '0'
-  const h24 = coinPrice?.usd_24h_change?.toFixed(2) ?? '0'
-
-  const verdictPhrases: Record<Verdict, string> = {
-    DANGER: `${priorityCoin} is showing significant downside momentum (${h1}% in 1h, ${h24}% in 24h) with Fear & Greed at ${fearGreed.value} (${fearGreed.label}). Capital protection recommended.`,
-    CAUTION: `${priorityCoin} is showing early warning signals (${h1}% in 1h) with market sentiment at ${fearGreed.label} (${fearGreed.value}). Monitor closely and consider reducing exposure.`,
-    OPPORTUNITY: `${priorityCoin} is displaying strong positive momentum (${h1}% in 1h, ${h24}% in 24h) with market sentiment at ${fearGreed.label} (${fearGreed.value}). Momentum indicators support adding to position.`,
-    NEUTRAL: `${priorityCoin} is within normal range (${h1}% in 1h, ${h24}% in 24h) with Fear & Greed at ${fearGreed.value} (${fearGreed.label}). No action required — continue holding.`,
-  }
-
-  const reasoning =
-    `[Local price analysis — all AI providers unavailable] ` +
-    (verdictPhrases[priorityVerdict] ?? verdictPhrases['NEUTRAL'])
-
-  return {
-    verdicts,
-    priorityCoin,
-    priorityAction,
-    reasoning,
-    confidence: 'MEDIUM',
-    rawResponse: JSON.stringify({
-      source: 'local-analyser',
-      errors: providerErrors,
-    }),
-  }
-}
+// Local analyser removed. Relying solely on AI.
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 

@@ -45,8 +45,10 @@ export default function LiveMockup() {
   const [data, setData] = useState<MarketData | null>(null)
   const [loading, setLoading] = useState(true)
   const [now, setNow] = useState(new Date())
+  const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
+    setMounted(true)
     async function load() {
       try {
         const res = await fetch('/api/market-data')
@@ -67,9 +69,7 @@ export default function LiveMockup() {
   // Compute verdicts from live data
   const coinRows = COINS.map((symbol) => {
     const price = data?.prices[symbol]
-    const verdict = price
-      ? getVerdict(price.usd_1h_change, price.usd_24h_change)
-      : 'NEUTRAL'
+    const verdict = price ? getVerdict(price.usd_1h_change, price.usd_24h_change) : 'NEUTRAL'
     const change = price
       ? `${price.usd_1h_change >= 0 ? '+' : ''}${price.usd_1h_change.toFixed(1)}%`
       : '—'
@@ -78,12 +78,12 @@ export default function LiveMockup() {
 
   // Find priority coin (most extreme)
   const priorityCoin = data
-    ? coinRows.reduce<typeof coinRows[0] | undefined>((prev, curr) => {
-        const score = (s: string) =>
-          s === 'DANGER' ? 4 : s === 'CAUTION' ? 3 : s === 'OPPORTUNITY' ? 2 : 1
-        if (!prev) return curr
-        return score(curr.verdict) > score(prev.verdict) ? curr : prev
-      }, undefined) ?? null
+    ? (coinRows.reduce<(typeof coinRows)[0] | undefined>((prev, curr) => {
+      const score = (s: string) =>
+        s === 'DANGER' ? 4 : s === 'CAUTION' ? 3 : s === 'OPPORTUNITY' ? 2 : 1
+      if (!prev) return curr
+      return score(curr.verdict) > score(prev.verdict) ? curr : prev
+    }, undefined) ?? null)
     : null
 
   const fearVal = data?.fearGreed.value ?? null
@@ -111,40 +111,42 @@ export default function LiveMockup() {
             {loading ? 'Connecting…' : 'Agent Active · Ethereum Sepolia'}
           </span>
         </div>
-        <span className="text-xs text-gray-500">Next scan in {nextStr}</span>
+        <span suppressHydrationWarning className="text-xs text-gray-500">
+          Next scan in {mounted ? nextStr : '—'}
+        </span>
       </div>
 
       {/* Verdict grid */}
       <div className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-4">
         {loading
           ? COINS.map((s) => (
-              <div
-                key={s}
-                className="h-24 animate-pulse rounded-xl border border-gray-800 bg-gray-800/50"
-              />
-            ))
+            <div
+              key={s}
+              className="h-24 animate-pulse rounded-xl border border-gray-800 bg-gray-800/50"
+            />
+          ))
           : coinRows.map((coin) => (
-              <div
-                key={coin.symbol}
-                className={`rounded-xl border p-4 ${VERDICT_BG[coin.verdict] ?? ''}`}
-              >
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-xs font-bold">
-                    {coin.symbol.slice(0, 2)}
-                  </div>
-                  <span className="text-sm">{VERDICT_DOT[coin.verdict]}</span>
+            <div
+              key={coin.symbol}
+              className={`rounded-xl border p-4 ${VERDICT_BG[coin.verdict] ?? ''}`}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-xs font-bold">
+                  {coin.symbol.slice(0, 2)}
                 </div>
-                <div className="text-sm font-bold">{coin.symbol}</div>
-                <div
-                  className={`mt-0.5 font-mono text-xs font-medium ${VERDICT_COLOR[coin.verdict]}`}
-                >
-                  {coin.change}
-                </div>
-                <div className="mt-1 text-[10px] font-semibold tracking-wider text-gray-500 uppercase">
-                  {coin.verdict}
-                </div>
+                <span className="text-sm">{VERDICT_DOT[coin.verdict]}</span>
               </div>
-            ))}
+              <div className="text-sm font-bold">{coin.symbol}</div>
+              <div
+                className={`mt-0.5 font-mono text-xs font-medium ${VERDICT_COLOR[coin.verdict]}`}
+              >
+                {coin.change}
+              </div>
+              <div className="mt-1 text-[10px] font-semibold tracking-wider text-gray-500 uppercase">
+                {coin.verdict}
+              </div>
+            </div>
+          ))}
       </div>
 
       {/* AI reasoning / status */}
@@ -154,15 +156,14 @@ export default function LiveMockup() {
           <span className="text-xs font-semibold text-purple-400">Venice AI Status</span>
           {priorityCoin && (
             <span
-              className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                priorityCoin.verdict === 'DANGER'
+              className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-bold ${priorityCoin.verdict === 'DANGER'
                   ? 'bg-red-500/20 text-red-400'
                   : priorityCoin.verdict === 'CAUTION'
                     ? 'bg-yellow-500/20 text-yellow-400'
                     : priorityCoin.verdict === 'OPPORTUNITY'
                       ? 'bg-green-500/20 text-green-400'
                       : 'bg-gray-500/20 text-gray-400'
-              }`}
+                }`}
             >
               {priorityCoin.symbol} · {priorityCoin.verdict}
             </span>

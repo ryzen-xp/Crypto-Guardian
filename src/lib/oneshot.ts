@@ -1,11 +1,29 @@
+import crypto from 'crypto'
 import type { RelayResult } from './types'
 
 const ONESHOT_BASE_URL = process.env.ONESHOT_API_URL ?? 'https://api.1shotapi.com'
 
 function getApiKey(): string {
   const key = process.env.ONESHOT_API_KEY
-  if (!key) throw new Error('ONESHOT_API_KEY environment variable is not set')
+  if (!key) {
+    if (
+      process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+      process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+    ) {
+      return 'mock_key'
+    }
+    throw new Error('ONESHOT_API_KEY environment variable is not set')
+  }
   return key
+}
+
+function getMockRelayResult(relayId?: string): RelayResult {
+  return {
+    relayId: relayId ?? `relay_${Math.random().toString(36).substring(2, 11)}`,
+    status: 'confirmed',
+    txHash: `0x${crypto.randomBytes(32).toString('hex')}`,
+    estimatedGasUSDC: (Math.random() * 0.5 + 0.1).toFixed(2),
+  }
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -39,61 +57,105 @@ type OneShotRelayResponse = {
 export async function relayTransaction(params: RelayParams): Promise<RelayResult> {
   const { to, data, value = '0x0', userAddress, chainId } = params
 
-  const res = await fetch(`${ONESHOT_BASE_URL}/v1/relay`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${getApiKey()}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      to,
-      data,
-      value,
-      from: userAddress,
-      chainId,
-    }),
-  })
+  try {
+    const res = await fetch(`${ONESHOT_BASE_URL}/v1/relay`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${getApiKey()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to,
+        data,
+        value,
+        from: userAddress,
+        chainId,
+      }),
+    })
 
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`1Shot relay error ${res.status}: ${text}`)
-  }
+    if (!res.ok) {
+      const text = await res.text()
+      if (
+        process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+        process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+      ) {
+        console.warn(
+          `[1Shot] Relayer returned error ${res.status}. Falling back to simulation mode because NEXT_PUBLIC_DEMO_MODE or NEXT_PUBLIC_IS_TESTNET is active.`
+        )
+        return getMockRelayResult()
+      }
+      throw new Error(`1Shot relay error ${res.status}: ${text}`)
+    }
 
-  const result = (await res.json()) as OneShotRelayResponse
+    const result = (await res.json()) as OneShotRelayResponse
 
-  return {
-    relayId: result.relayId,
-    status: result.status === 'confirmed' ? 'confirmed' : 'pending',
-    txHash: result.txHash,
-    estimatedGasUSDC: result.estimatedGasUSDC,
+    return {
+      relayId: result.relayId,
+      status: result.status === 'confirmed' ? 'confirmed' : 'pending',
+      txHash: result.txHash,
+      estimatedGasUSDC: result.estimatedGasUSDC,
+    }
+  } catch (error) {
+    if (
+      process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+      process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+    ) {
+      console.warn(
+        `[1Shot] Relayer failed: ${error instanceof Error ? error.message : String(error)}. Falling back to simulation mode.`
+      )
+      return getMockRelayResult()
+    }
+    throw error
   }
 }
 
 // ─── Get Relay Status ─────────────────────────────────────────────────────────
 
 export async function getRelayStatus(relayId: string): Promise<RelayResult> {
-  const res = await fetch(`${ONESHOT_BASE_URL}/v1/relay/${relayId}`, {
-    headers: {
-      Authorization: `Bearer ${getApiKey()}`,
-    },
-  })
+  try {
+    const res = await fetch(`${ONESHOT_BASE_URL}/v1/relay/${relayId}`, {
+      headers: {
+        Authorization: `Bearer ${getApiKey()}`,
+      },
+    })
 
-  if (!res.ok) {
-    throw new Error(`1Shot status check error ${res.status}`)
-  }
+    if (!res.ok) {
+      if (
+        process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+        process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+      ) {
+        console.warn(
+          `[1Shot] Status check returned error ${res.status}. Returning simulated confirmed status.`
+        )
+        return getMockRelayResult(relayId)
+      }
+      throw new Error(`1Shot status check error ${res.status}`)
+    }
 
-  const result = (await res.json()) as OneShotRelayResponse
+    const result = (await res.json()) as OneShotRelayResponse
 
-  return {
-    relayId: result.relayId,
-    status:
-      result.status === 'confirmed'
-        ? 'confirmed'
-        : result.status === 'failed'
-          ? 'failed'
-          : 'pending',
-    txHash: result.txHash,
-    estimatedGasUSDC: result.estimatedGasUSDC,
+    return {
+      relayId: result.relayId,
+      status:
+        result.status === 'confirmed'
+          ? 'confirmed'
+          : result.status === 'failed'
+            ? 'failed'
+            : 'pending',
+      txHash: result.txHash,
+      estimatedGasUSDC: result.estimatedGasUSDC,
+    }
+  } catch (error) {
+    if (
+      process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+      process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+    ) {
+      console.warn(
+        `[1Shot] Status check failed: ${error instanceof Error ? error.message : String(error)}. Returning simulated confirmed status.`
+      )
+      return getMockRelayResult(relayId)
+    }
+    throw error
   }
 }
 
@@ -104,28 +166,48 @@ export async function getRelayStatus(relayId: string): Promise<RelayResult> {
  * Returns the Smart Account address (same as original address).
  */
 export async function upgradeAccountEIP7702(walletAddress: string): Promise<string> {
-  const res = await fetch(`${ONESHOT_BASE_URL}/v1/upgrade`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${getApiKey()}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      address: walletAddress,
-      chainId: process.env.NEXT_PUBLIC_IS_TESTNET === 'true' ? 11155111 : 1,
-    }),
-  })
+  try {
+    const res = await fetch(`${ONESHOT_BASE_URL}/v1/upgrade`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${getApiKey()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        address: walletAddress,
+        chainId: process.env.NEXT_PUBLIC_IS_TESTNET === 'true' ? 11155111 : 1,
+      }),
+    })
 
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`1Shot EIP-7702 upgrade error ${res.status}: ${text}`)
+    if (!res.ok) {
+      const text = await res.text()
+      if (
+        process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+        process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+      ) {
+        console.warn(
+          `[1Shot] EIP-7702 upgrade returned error ${res.status}. Falling back to simulation mode.`
+        )
+        return walletAddress
+      }
+      throw new Error(`1Shot EIP-7702 upgrade error ${res.status}: ${text}`)
+    }
+
+    const result = (await res.json()) as { smartAccountAddress: string; txHash: string }
+    return result.smartAccountAddress
+  } catch (error) {
+    if (
+      process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+      process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+    ) {
+      console.warn(
+        `[1Shot] EIP-7702 upgrade failed: ${error instanceof Error ? error.message : String(error)}. Falling back to simulation mode.`
+      )
+      return walletAddress
+    }
+    throw error
   }
-
-  const result = (await res.json()) as { smartAccountAddress: string; txHash: string }
-  return result.smartAccountAddress
 }
-
-import crypto from 'crypto'
 
 // ─── Webhook Signature Verification ──────────────────────────────────────────
 

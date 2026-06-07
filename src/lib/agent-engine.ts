@@ -86,9 +86,22 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   }
 
   // ── Step 4: Check rules for priority coin ─────────────────────────────────
-  const prioritySymbol = analysis.priorityCoin
-  const priorityVerdict = analysis.verdicts[prioritySymbol] ?? 'NEUTRAL'
-  const priorityAction = analysis.priorityAction
+  let prioritySymbol = analysis.priorityCoin
+  let priorityVerdict = analysis.verdicts[prioritySymbol] ?? 'NEUTRAL'
+  let priorityAction = analysis.priorityAction
+  let reasoning = analysis.reasoning
+
+  // OVERRIDE: If any active coin is in DANGER, prioritize protecting it by forcing a SELL (swap)
+  const dangerCoin = activeCoins.find((symbol) => analysis.verdicts[symbol] === 'DANGER')
+  if (dangerCoin) {
+    prioritySymbol = dangerCoin
+    priorityVerdict = 'DANGER'
+    priorityAction = 'SELL'
+    reasoning = `[CRITICAL PROTECTION] Forcing automated swap of ${dangerCoin} to stablecoin due to DANGER status. ${reasoning}`
+    console.warn(
+      `[agent-engine] Override: active coin ${dangerCoin} is in DANGER! Forcing SELL action for protection.`
+    )
+  }
 
   const ruleCheck = checkUserRules({
     symbol: prioritySymbol,
@@ -109,7 +122,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
       amountUSD: ruleCheck.swapAmountUSD,
       userAddress,
       price: marketSnapshot.prices[prioritySymbol]?.usd ?? 0,
-      reasoning: analysis.reasoning,
+      reasoning: reasoning,
       stablecoinSymbol,
     })
   } else {
@@ -132,7 +145,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     verdicts: analysis.verdicts,
     priorityCoin: prioritySymbol,
     actionTaken,
-    reasoning: analysis.reasoning,
+    reasoning: reasoning,
     newsSnippets,
     loopDurationMs: Date.now() - startTime,
     nextRunAt: getNextRunAt(),
@@ -161,13 +174,25 @@ type RuleCheckResult = {
 function checkUserRules(params: RuleCheckParams): RuleCheckResult {
   const { symbol, action, verdict, settings, price } = params
 
-  const setting = settings[symbol]
+  const isDangerSell = verdict === 'DANGER' && action === 'SELL'
+  let setting = settings[symbol]
 
   if (!setting) {
-    return { allowed: false, reason: `No settings found for ${symbol}`, swapAmountUSD: 0 }
+    if (isDangerSell) {
+      // Create a temporary default setting for critical protection
+      setting = {
+        enabled: true,
+        maxSwapUSD: 300,
+        dailyLimitUSD: 600,
+        minHoldUSD: 100,
+        riskSensitivity: 'conservative',
+      }
+    } else {
+      return { allowed: false, reason: `No settings found for ${symbol}`, swapAmountUSD: 0 }
+    }
   }
 
-  if (!setting.enabled) {
+  if (!setting.enabled && !isDangerSell) {
     return { allowed: false, reason: `Monitoring is disabled for ${symbol}`, swapAmountUSD: 0 }
   }
 
@@ -199,8 +224,10 @@ function checkUserRules(params: RuleCheckParams): RuleCheckResult {
   }
 
   // Calculate swap amount based on risk sensitivity
-  const swapPercentage =
-    setting.riskSensitivity === 'aggressive'
+  // For danger sells, we want to protect the asset by swapping 100% of maxSwapUSD (swapPercentage = 1.0)
+  const swapPercentage = isDangerSell
+    ? 1.0
+    : setting.riskSensitivity === 'aggressive'
       ? 0.75
       : setting.riskSensitivity === 'moderate'
         ? 0.5
@@ -218,7 +245,9 @@ function checkUserRules(params: RuleCheckParams): RuleCheckResult {
 
   return {
     allowed: true,
-    reason: `Action approved: ${action} $${swapAmountUSD.toFixed(2)} of ${symbol}`,
+    reason: isDangerSell
+      ? `Action approved [CRITICAL PROTECTION]: ${action} $${swapAmountUSD.toFixed(2)} of ${symbol} due to DANGER status`
+      : `Action approved: ${action} $${swapAmountUSD.toFixed(2)} of ${symbol}`,
     swapAmountUSD,
   }
 }

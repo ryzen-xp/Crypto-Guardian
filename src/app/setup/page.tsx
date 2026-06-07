@@ -428,7 +428,10 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
                   }
 
                   return (
-                    <div key={symbol} className="rounded-xl border border-white/8 bg-gray-900/50 p-4">
+                    <div
+                      key={symbol}
+                      className="rounded-xl border border-white/8 bg-gray-900/50 p-4"
+                    >
                       <div className="mb-3 flex items-center justify-between border-b border-white/5 pb-2">
                         <div className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-green-400" />
@@ -436,13 +439,15 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         <div>
-                          <label className="block text-xs font-semibold text-gray-400 mb-1">
+                          <label className="mb-1 block text-xs font-semibold text-gray-400">
                             Max Per Swap (USD)
                           </label>
                           <div className="relative flex items-center">
-                            <span className="absolute left-3 text-sm text-gray-500 font-mono">$</span>
+                            <span className="absolute left-3 font-mono text-sm text-gray-500">
+                              $
+                            </span>
                             <input
                               type="number"
                               min="1"
@@ -452,17 +457,19 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
                                   maxSwapUSD: Math.max(1, Number(e.target.value)),
                                 })
                               }
-                              className="w-full rounded-lg border border-white/10 bg-white/5 pl-7 pr-3 py-1.5 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
+                              className="w-full rounded-lg border border-white/10 bg-white/5 py-1.5 pr-3 pl-7 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
                             />
                           </div>
                         </div>
 
                         <div>
-                          <label className="block text-xs font-semibold text-gray-400 mb-1">
+                          <label className="mb-1 block text-xs font-semibold text-gray-400">
                             Daily Limit (USD)
                           </label>
                           <div className="relative flex items-center">
-                            <span className="absolute left-3 text-sm text-gray-500 font-mono">$</span>
+                            <span className="absolute left-3 font-mono text-sm text-gray-500">
+                              $
+                            </span>
                             <input
                               type="number"
                               min="1"
@@ -472,27 +479,32 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
                                   dailyLimitUSD: Math.max(1, Number(e.target.value)),
                                 })
                               }
-                              className="w-full rounded-lg border border-white/10 bg-white/5 pl-7 pr-3 py-1.5 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
+                              className="w-full rounded-lg border border-white/10 bg-white/5 py-1.5 pr-3 pl-7 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
                             />
                           </div>
                         </div>
 
                         <div className="md:col-span-2">
-                          <label className="block text-xs font-semibold text-gray-400 mb-1">
+                          <label className="mb-1 block text-xs font-semibold text-gray-400">
                             Risk Sensitivity Mode
                           </label>
                           <select
                             value={setting.riskSensitivity}
                             onChange={(e) =>
                               updateCoinSetting(symbol, {
-                                riskSensitivity: e.target.value as 'conservative' | 'moderate' | 'aggressive',
+                                riskSensitivity: e.target.value as
+                                  | 'conservative'
+                                  | 'moderate'
+                                  | 'aggressive',
                               })
                             }
                             className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-950"
                           >
                             <option value="conservative">Conservative (Swap 25% on DANGER)</option>
                             <option value="moderate">Moderate (Swap 50% on DANGER)</option>
-                            <option value="aggressive">Aggressive (Swap 75% on DANGER, BUY on OPPORTUNITY)</option>
+                            <option value="aggressive">
+                              Aggressive (Swap 75% on DANGER, BUY on OPPORTUNITY)
+                            </option>
                           </select>
                         </div>
                       </div>
@@ -522,15 +534,18 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
                           <div className="h-1.5 w-1.5 rounded-full bg-green-400" />
                           <span className="text-sm font-medium">{symbol}</span>
                         </div>
-                        <span className="text-xs text-gray-400 font-mono">
-                          max ${setting?.maxSwapUSD ?? 300}/swap · ${setting?.dailyLimitUSD ?? 600}/day
+                        <span className="font-mono text-xs text-gray-400">
+                          max ${setting?.maxSwapUSD ?? 300}/swap · ${setting?.dailyLimitUSD ?? 600}
+                          /day
                         </span>
                       </div>
                     )
                   })}
                   <div className="flex items-center justify-between border-t border-white/5 pt-2">
                     <span className="text-sm font-medium text-gray-300">Target safe asset</span>
-                    <span className="text-xs font-semibold text-blue-400">{selectedStablecoin}</span>
+                    <span className="text-xs font-semibold text-blue-400">
+                      {selectedStablecoin}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-300">Grant expiry</span>
@@ -555,7 +570,7 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
                   <button
                     onClick={handleGrantPermissions}
                     disabled={isSigning}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3.5 text-sm font-semibold shadow-lg shadow-green-600/20 transition hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-600 py-3.5 text-sm font-semibold shadow-lg shadow-green-600/20 transition hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isSigning ? (
                       <>
@@ -570,12 +585,13 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
                     )}
                   </button>
                   <p className="mt-3 text-center text-xs text-gray-600">
-                    Triggers a cryptographic MetaMask signature request to authorize EIP-7702 and 1Shot relayer execution.
+                    Triggers a cryptographic MetaMask signature request to authorize EIP-7702 and
+                    1Shot relayer execution.
                   </p>
                 </>
               ) : (
                 <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-5 text-center">
-                  <CheckCircle className="mx-auto mb-2 h-10 w-10 text-green-400 animate-bounce" />
+                  <CheckCircle className="mx-auto mb-2 h-10 w-10 animate-bounce text-green-400" />
                   <p className="font-semibold text-green-400">Signature authorized successfully!</p>
                   <p className="mt-1 text-xs text-gray-400">
                     CryptoGuardian agent is now running and monitoring your assets.

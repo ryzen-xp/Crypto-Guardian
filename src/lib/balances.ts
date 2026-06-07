@@ -85,7 +85,7 @@ export async function fetchWalletBalances(walletAddress: string): Promise<Wallet
         } else {
           // ERC20 balance — may fail on testnet if contract not deployed
           rawBalance = (await client.readContract({
-            address: coin.baseAddress as `0x${string}`,
+            address: coin.baseAddress.toLowerCase() as `0x${string}`,
             abi: ERC20_ABI,
             functionName: 'balanceOf',
             args: [walletAddress as `0x${string}`],
@@ -104,7 +104,9 @@ export async function fetchWalletBalances(walletAddress: string): Promise<Wallet
           isHeld,
         }
       } catch (err) {
-        console.error(`[fetchWalletBalances] Error fetching ${coin.symbol} for ${walletAddress}:`, err)
+        console.warn(
+          `[fetchWalletBalances] Fetching ${coin.symbol} balance failed (likely not deployed on this network): ${err instanceof Error ? err.message : String(err)}`
+        )
         // If balance check fails (contract not deployed on testnet, etc.)
         // mark as not held rather than crashing — this is expected on Sepolia
         // for WBTC, ARB, OP which rarely have real testnet deployments

@@ -286,9 +286,7 @@ export default function DashboardPage() {
               </span>
             )}
             {isConnected && !balancesLoading && heldCoins.length === 0 && IS_TESTNET && (
-              <span className="text-xs text-blue-400">
-                Testnet: will scan all 4 coins
-              </span>
+              <span className="text-xs text-blue-400">Testnet: will scan all 4 coins</span>
             )}
             {isConnected && !balancesLoading && heldCoins.length === 0 && !IS_TESTNET && (
               <span className="text-xs text-yellow-500">No monitored assets detected</span>
@@ -299,7 +297,7 @@ export default function DashboardPage() {
             <button
               onClick={togglePause}
               disabled={!isConnected || status === 'idle'}
-              className="flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-1.5 text-xs transition-colors hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-1.5 text-xs transition-colors hover:border-gray-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
               {isPaused ? 'Resume' : 'Pause'}
@@ -307,7 +305,7 @@ export default function DashboardPage() {
             <button
               onClick={() => runAgentScan(true)}
               disabled={!isConnected || status === 'running' || isPaused}
-              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <RefreshCw className={cn('h-3 w-3', status === 'running' && 'animate-spin')} />
               Run Scan Now
