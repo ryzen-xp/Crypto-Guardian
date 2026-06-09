@@ -1,7 +1,9 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { buildSellToStable, buildBuyWithStable } from '@/lib/uniswap'
-import { relayTransaction } from '@/lib/oneshot'
+import { relayUniswapSwap } from '@/lib/oneshot'
+import { CHAIN_ID } from '@/lib/chain-config'
 import { getCoin, DEFAULT_STABLECOIN, STABLECOINS } from '@/lib/coins'
+import { fetchWalletBalances } from '@/lib/balances'
 
 type RequestBody = {
   userAddress: string
@@ -44,31 +46,48 @@ export async function POST(req: NextRequest) {
     }
 
     const coin = getCoin(coinSymbol)
+    const walletBalances = await fetchWalletBalances(userAddress)
+    const balance = walletBalances[coinSymbol]
+
+    if (action === 'SELL' && !balance?.isHeld) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `No held balance found for ${coinSymbol}. The wallet is already on hold.`,
+          code: 'NO_BALANCE',
+        },
+        { status: 400 }
+      )
+    }
 
     const calldata =
       action === 'SELL'
         ? buildSellToStable({
-            tokenAddress: coin.baseAddress,
-            tokenDecimals: coin.decimals,
-            amountInUSD: amountUSD,
-            tokenPriceUSD,
-            recipient: userAddress,
-            stablecoinSymbol,
-          })
+          tokenAddress: coin.baseAddress,
+          tokenDecimals: coin.decimals,
+          amountInUSD: amountUSD,
+          tokenPriceUSD,
+          recipient: userAddress,
+          stablecoinSymbol,
+          tokenBalanceRaw: balance?.rawBalance,
+          isNative: coinSymbol === 'ETH',
+        })
         : buildBuyWithStable({
-            tokenAddress: coin.baseAddress,
-            amountInUSD: amountUSD,
-            recipient: userAddress,
-            stablecoinSymbol,
-          })
+          tokenAddress: coin.baseAddress,
+          amountInUSD: amountUSD,
+          recipient: userAddress,
+          stablecoinSymbol,
+        })
 
-    const relay = await relayTransaction({
+    const relay = await relayUniswapSwap({
       to: calldata.to,
       data: calldata.data,
+      value: calldata.value,
       userAddress,
-      chainId: 11155111, // Ethereum Sepolia (change to 1 for mainnet)
+      chainId: CHAIN_ID,
     })
 
+    console.warn(`[execute-swap] Swap relay successful: ${relay.relayId}`)
     return NextResponse.json({ success: true, data: relay })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

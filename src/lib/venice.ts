@@ -113,7 +113,7 @@ async function openAICompatRequest(
   if (!res.ok) {
     const text = await res.text()
     const err = new Error(`${provider.name} error ${res.status}: ${text}`)
-    ;(err as Error & { status: number }).status = res.status
+      ; (err as Error & { status: number }).status = res.status
     throw err
   }
 
@@ -165,7 +165,7 @@ async function geminiRequest(
   if (!res.ok) {
     const text = await res.text()
     const err = new Error(`Gemini error ${res.status}: ${text}`)
-    ;(err as Error & { status: number }).status = res.status
+      ; (err as Error & { status: number }).status = res.status
     throw err
   }
 
@@ -213,7 +213,7 @@ export async function searchCoinNews(coinSymbol: string, coinName: string): Prom
       {
         tools: [{ type: 'web_search' }],
         tool_choice: 'auto',
-        max_tokens: 200,
+        max_tokens: 300,
       }
     )
     return content.trim()
@@ -262,7 +262,7 @@ export async function analyzeMarket(context: MarketContext): Promise<AnalysisRes
 
     try {
       console.warn(`[ai] Trying ${provider.name}...`)
-      const raw = await callProvider(provider, messages, { temperature: 0.3, max_tokens: 600 })
+      const raw = await callProvider(provider, messages, { temperature: 0.3, max_tokens: 1200 })
       const result = parseAIResponse(raw, context.activeCoins)
 
       console.warn(`[ai] Success with ${provider.name}`)
@@ -278,10 +278,9 @@ export async function analyzeMarket(context: MarketContext): Promise<AnalysisRes
     }
   }
 
-  // All AI providers failed — throw exception
-  throw new Error(
-    `Market analysis failed. All AI providers (Venice, Groq, Gemini) are currently unavailable or returned invalid signatures. Errors:\n- ${errors.join('\n- ')}`
-  )
+  // All AI providers failed — use local rule-based analyser
+  console.warn('[ai] All providers failed — using local analyser.', errors)
+  return localAnalyser(context, errors)
 }
 
 // ─── Response parser (works for all providers) ────────────────────────────────
@@ -296,7 +295,10 @@ function parseAIResponse(raw: string, activeCoins: string[]): AnalysisResult {
   try {
     parsed = JSON.parse(cleaned) as Record<string, unknown>
   } catch {
-    throw new Error(`Invalid JSON: ${cleaned.slice(0, 200)}`)
+    // Log more context for debugging
+    const preview = cleaned.length > 500 ? cleaned.slice(0, 500) + '...' : cleaned
+    console.error(`[ai] JSON parse failed. Length: ${cleaned.length}. Content: ${preview}`)
+    throw new Error(`Invalid JSON from AI provider. Response length: ${cleaned.length}. First 200 chars: ${cleaned.slice(0, 200)}`)
   }
 
   if (!parsed['verdicts'] || !parsed['priority_coin'] || !parsed['reasoning']) {
@@ -327,7 +329,88 @@ function parseAIResponse(raw: string, activeCoins: string[]): AnalysisResult {
   }
 }
 
-// Local analyser removed. Relying solely on AI.
+// ─── Local rule-based analyser (no AI, no network) ───────────────────────────
+
+function localAnalyser(context: MarketContext, providerErrors: string[]): AnalysisResult {
+  const { prices, fearGreed, activeCoins } = context
+  const verdicts: Record<string, Verdict> = {}
+  const scores: Record<string, number> = {}
+
+  for (const symbol of activeCoins) {
+    const p = prices[symbol]
+    if (!p) {
+      verdicts[symbol] = 'NEUTRAL'
+      scores[symbol] = 0
+      continue
+    }
+
+    const { usd_1h_change: h1, usd_24h_change: h24 } = p
+    const fg = fearGreed.value
+    let score = 0
+
+    if (h1 <= -8) score -= 4
+    else if (h1 <= -5) score -= 3
+    else if (h1 <= -3) score -= 2
+    else if (h1 <= -1) score -= 1
+    else if (h1 >= 8) score += 4
+    else if (h1 >= 5) score += 3
+    else if (h1 >= 3) score += 2
+    else if (h1 >= 1) score += 1
+
+    if (h24 <= -12) score -= 2
+    else if (h24 <= -6) score -= 1
+    else if (h24 >= 12) score += 2
+    else if (h24 >= 6) score += 1
+
+    if (fg <= 20 && score < 0) score -= 2
+    if (fg <= 25 && score < 0) score -= 1
+    if (fg >= 80 && score > 0) score -= 1
+
+    scores[symbol] = score
+    if (score <= -5) verdicts[symbol] = 'DANGER'
+    else if (score <= -2) verdicts[symbol] = 'CAUTION'
+    else if (score >= 4) verdicts[symbol] = 'OPPORTUNITY'
+    else verdicts[symbol] = 'NEUTRAL'
+  }
+
+  const priorityCoin =
+    activeCoins.reduce((worst, sym) => {
+      const ws = scores[worst] ?? 0
+      const cs = scores[sym] ?? 0
+      return Math.abs(cs) > Math.abs(ws) ? sym : worst
+    }, activeCoins[0] ?? 'ETH') ?? 'ETH'
+
+  const priorityScore = scores[priorityCoin] ?? 0
+  const priorityAction: 'BUY' | 'SELL' | 'HOLD' =
+    priorityScore <= -2 ? 'SELL' : priorityScore >= 4 ? 'BUY' : 'HOLD'
+  const priorityVerdict = verdicts[priorityCoin] ?? 'NEUTRAL'
+  const coinPrice = prices[priorityCoin]
+  const h1 = coinPrice?.usd_1h_change?.toFixed(2) ?? '0'
+  const h24 = coinPrice?.usd_24h_change?.toFixed(2) ?? '0'
+
+  const verdictPhrases: Record<Verdict, string> = {
+    DANGER: `${priorityCoin} is showing significant downside momentum (${h1}% in 1h, ${h24}% in 24h) with Fear & Greed at ${fearGreed.value} (${fearGreed.label}). Capital protection recommended.`,
+    CAUTION: `${priorityCoin} is showing early warning signals (${h1}% in 1h) with market sentiment at ${fearGreed.label} (${fearGreed.value}). Monitor closely and consider reducing exposure.`,
+    OPPORTUNITY: `${priorityCoin} is displaying strong positive momentum (${h1}% in 1h, ${h24}% in 24h) with market sentiment at ${fearGreed.label} (${fearGreed.value}). Momentum indicators support adding to position.`,
+    NEUTRAL: `${priorityCoin} is within normal range (${h1}% in 1h, ${h24}% in 24h) with Fear & Greed at ${fearGreed.value} (${fearGreed.label}). No action required — continue holding.`,
+  }
+
+  const reasoning =
+    `[Local price analysis — all AI providers unavailable] ` +
+    (verdictPhrases[priorityVerdict] ?? verdictPhrases.NEUTRAL)
+
+  return {
+    verdicts,
+    priorityCoin,
+    priorityAction,
+    reasoning,
+    confidence: 'MEDIUM',
+    rawResponse: JSON.stringify({
+      source: 'local-analyser',
+      errors: providerErrors,
+    }),
+  }
+}
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 

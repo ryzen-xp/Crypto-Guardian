@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAccount, useSwitchChain, useSignMessage } from 'wagmi'
-import { ConnectButton } from '@rainbow-me/rainbowkit'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,6 +20,7 @@ import {
   Info,
 } from 'lucide-react'
 import Header from '@/components/layout/Header'
+import ConnectWalletButton from '@/components/wallet/ConnectWalletButton'
 import { MONITORED_COINS, STABLECOINS } from '@/lib/coins'
 import { CHAIN_CONFIG, ACTIVE_CHAIN } from '@/lib/chain-config'
 import { useCoinStore } from '@/store/coinStore'
@@ -84,7 +84,7 @@ export default function SetupPage() {
   const handleContinue = () => {
     if (step === 1 && canProceedStep1) setStep(2)
     else if (step === 2 && canProceedStep2) setStep(3)
-    else if (step === 3) router.push('/dashboard')
+    else if (step === 3) router.push('/dashboard?autoStart=1')
   }
 
   const handleGrantPermissions = async () => {
@@ -109,7 +109,7 @@ Safe Stablecoin: ${selectedStablecoin}
 Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
 
       const signature = await signMessageAsync({ message: msg })
-      console.log('Permission signature obtained:', signature)
+      console.warn('Permission signature obtained:', signature)
       setPermissionsGranted(true)
     } catch (err) {
       console.error('Signing failed:', err)
@@ -185,17 +185,17 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
             {!isConnected ? (
               <div className="space-y-4">
                 <div className="flex justify-center">
-                  <ConnectButton label="Connect MetaMask" />
+                  <ConnectWalletButton label="Connect Wallet" />
                 </div>
                 <p className="text-center text-xs text-gray-500">
-                  Don&apos;t have MetaMask?{' '}
+                  Don&apos;t have a wallet?{' '}
                   <a
                     href="https://metamask.io/download"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-blue-400 hover:text-blue-300"
                   >
-                    Install it free
+                    Install one free
                   </a>
                 </p>
               </div>

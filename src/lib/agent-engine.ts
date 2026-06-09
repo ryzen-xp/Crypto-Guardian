@@ -1,28 +1,59 @@
 import { getCoin, MONITORED_COINS } from './coins'
+import { fetchWalletBalances } from './balances'
 import { fetchMarketSnapshot } from './market-data'
 import { fetchAllCoinNews, analyzeMarket } from './venice'
 import { buildSellToStable, buildBuyWithStable } from './uniswap'
-import { relayTransaction } from './oneshot'
+import { relayUniswapSwap } from './oneshot'
 import { IS_TESTNET } from './chain-config'
 import type { AgentAction, AgentLoopResult, CoinSettings, Verdict } from './types'
 
 // ─── Cooldown ─────────────────────────────────────────────────────────────────
 
 const LOOP_INTERVAL_MS = 100 * 1000 // 100 seconds
+const LOCAL_ANALYZER_BACKOFF_MS = 5 * 60 * 1000
+const HOLDING_EMPTY_BACKOFF_MS = 60 * 60 * 1000
+const SINGLE_ASSET_DRAIN_BACKOFF_MS = 30 * 60 * 1000
+const FAILED_SWAP_BACKOFF_MS = 5 * 60 * 1000
 let lastRunAt: Date | null = null
+let nextAllowedRunAt: Date | null = null
 
 export function getLastRunAt(): Date | null {
   return lastRunAt
 }
 
 export function getNextRunAt(): Date {
-  if (!lastRunAt) return new Date()
-  return new Date(lastRunAt.getTime() + LOOP_INTERVAL_MS)
+  return nextAllowedRunAt ?? new Date()
 }
 
 export function isOnCooldown(): boolean {
-  if (!lastRunAt) return false
-  return Date.now() - lastRunAt.getTime() < LOOP_INTERVAL_MS
+  if (!nextAllowedRunAt) return false
+  return Date.now() < nextAllowedRunAt.getTime()
+}
+
+function calculateNextRunAt(params: {
+  heldCoinCount: number
+  usedLocalAnalyser: boolean
+  actionTaken: AgentAction | null
+}): Date {
+  const now = Date.now()
+
+  if (params.heldCoinCount === 0) {
+    return new Date(now + HOLDING_EMPTY_BACKOFF_MS)
+  }
+
+  if (params.actionTaken?.status === 'failed') {
+    return new Date(now + FAILED_SWAP_BACKOFF_MS)
+  }
+
+  if (params.actionTaken?.status === 'confirmed' && params.heldCoinCount === 1) {
+    return new Date(now + SINGLE_ASSET_DRAIN_BACKOFF_MS)
+  }
+
+  if (params.usedLocalAnalyser) {
+    return new Date(now + LOCAL_ANALYZER_BACKOFF_MS)
+  }
+
+  return new Date(now + LOOP_INTERVAL_MS)
 }
 
 // ─── Agent Loop ───────────────────────────────────────────────────────────────
@@ -54,6 +85,37 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
 
   const startTime = Date.now()
 
+  const walletBalances = await fetchWalletBalances(userAddress)
+  const heldCoins = activeCoins.filter((symbol) => walletBalances[symbol]?.isHeld)
+  const marketHoldReason = 'No volatile assets held. Monitoring is on hold until a balance appears.'
+
+  if (heldCoins.length === 0) {
+    const ranAt = new Date()
+    const nextRunAt = calculateNextRunAt({
+      heldCoinCount: 0,
+      usedLocalAnalyser: false,
+      actionTaken: null,
+    })
+
+    lastRunAt = ranAt
+    nextAllowedRunAt = nextRunAt
+
+    return {
+      verdicts: Object.fromEntries(
+        activeCoins.map((symbol) => [symbol, 'NEUTRAL' as Verdict])
+      ) as Record<string, Verdict>,
+      priorityCoin: '',
+      actionTaken: null,
+      reasoning: marketHoldReason,
+      newsSnippets: {},
+      loopDurationMs: Date.now() - startTime,
+      nextRunAt,
+      ranAt,
+      stablecoinUsed: stablecoinSymbol,
+      veniceWarning: marketHoldReason,
+    }
+  }
+
   // ── Step 1: Fetch market data ──────────────────────────────────────────────
   const marketSnapshot = await fetchMarketSnapshot()
 
@@ -61,14 +123,14 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   const coinNames = Object.fromEntries(
     activeCoins.map((symbol) => [symbol, MONITORED_COINS[symbol]?.name ?? symbol])
   )
-  const newsSnippets = await fetchAllCoinNews(activeCoins, coinNames)
+  const newsSnippets = await fetchAllCoinNews(heldCoins, coinNames)
 
   // ── Step 3: Venice AI analysis (falls back to local analyser automatically) ──
   const analysis = await analyzeMarket({
     prices: marketSnapshot.prices,
     fearGreed: marketSnapshot.fearGreed,
     newsSnippets,
-    activeCoins,
+    activeCoins: heldCoins,
     userSettings: coinSettings,
   })
 
@@ -92,7 +154,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   let reasoning = analysis.reasoning
 
   // OVERRIDE: If any active coin is in DANGER, prioritize protecting it by forcing a SELL (swap)
-  const dangerCoin = activeCoins.find((symbol) => analysis.verdicts[symbol] === 'DANGER')
+  const dangerCoin = heldCoins.find((symbol) => analysis.verdicts[symbol] === 'DANGER')
   if (dangerCoin) {
     prioritySymbol = dangerCoin
     priorityVerdict = 'DANGER'
@@ -109,21 +171,27 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     verdict: priorityVerdict,
     settings: coinSettings,
     price: marketSnapshot.prices[prioritySymbol]?.usd ?? 0,
+    balanceUSD: (walletBalances[prioritySymbol]?.formatted ?? 0) * (marketSnapshot.prices[prioritySymbol]?.usd ?? 0),
   })
 
   // ── Step 5: Execute swap if action is warranted ───────────────────────────
   let actionTaken: AgentAction | null = null
 
   if (ruleCheck.allowed && priorityAction !== 'HOLD') {
+    const balance = walletBalances[prioritySymbol]
     actionTaken = await executeSwap({
       symbol: prioritySymbol,
       action: priorityAction,
       verdict: priorityVerdict,
-      amountUSD: ruleCheck.swapAmountUSD,
+      amountUSD:
+        priorityAction === 'SELL'
+          ? (balance?.formatted ?? 0) * (marketSnapshot.prices[prioritySymbol]?.usd ?? 0)
+          : ruleCheck.swapAmountUSD,
       userAddress,
       price: marketSnapshot.prices[prioritySymbol]?.usd ?? 0,
       reasoning: reasoning,
       stablecoinSymbol,
+      balance: balance ?? { symbol: prioritySymbol, rawBalance: BigInt(0), decimals: 18, formatted: 0, isHeld: false },
     })
   } else {
     // Log the skip
@@ -140,6 +208,11 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   }
 
   lastRunAt = new Date()
+  nextAllowedRunAt = calculateNextRunAt({
+    heldCoinCount: heldCoins.length,
+    usedLocalAnalyser: analysis.rawResponse.includes('local-analyser'),
+    actionTaken,
+  })
 
   return {
     verdicts: analysis.verdicts,
@@ -148,7 +221,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     reasoning: reasoning,
     newsSnippets,
     loopDurationMs: Date.now() - startTime,
-    nextRunAt: getNextRunAt(),
+    nextRunAt: nextAllowedRunAt,
     ranAt: lastRunAt,
     stablecoinUsed: stablecoinSymbol,
     veniceWarning,
@@ -163,6 +236,7 @@ type RuleCheckParams = {
   verdict: Verdict
   settings: CoinSettings
   price: number
+  balanceUSD: number
 }
 
 type RuleCheckResult = {
@@ -172,7 +246,7 @@ type RuleCheckResult = {
 }
 
 function checkUserRules(params: RuleCheckParams): RuleCheckResult {
-  const { symbol, action, verdict, settings, price } = params
+  const { symbol, action, verdict, settings, price, balanceUSD } = params
 
   const isDangerSell = verdict === 'DANGER' && action === 'SELL'
   let setting = settings[symbol]
@@ -194,6 +268,10 @@ function checkUserRules(params: RuleCheckParams): RuleCheckResult {
 
   if (!setting.enabled && !isDangerSell) {
     return { allowed: false, reason: `Monitoring is disabled for ${symbol}`, swapAmountUSD: 0 }
+  }
+
+  if (isDangerSell && balanceUSD <= 0) {
+    return { allowed: false, reason: `No balance available for ${symbol}`, swapAmountUSD: 0 }
   }
 
   // Conservative: only act on DANGER for sells
@@ -234,6 +312,7 @@ function checkUserRules(params: RuleCheckParams): RuleCheckResult {
         : 0.25
 
   const swapAmountUSD = Math.min(setting.maxSwapUSD, setting.maxSwapUSD * swapPercentage)
+  const dangerSellAmountUSD = balanceUSD
 
   if (swapAmountUSD <= 0) {
     return { allowed: false, reason: 'Swap amount is zero', swapAmountUSD: 0 }
@@ -246,9 +325,9 @@ function checkUserRules(params: RuleCheckParams): RuleCheckResult {
   return {
     allowed: true,
     reason: isDangerSell
-      ? `Action approved [CRITICAL PROTECTION]: ${action} $${swapAmountUSD.toFixed(2)} of ${symbol} due to DANGER status`
+      ? `Action approved [CRITICAL PROTECTION]: ${action} $${dangerSellAmountUSD.toFixed(2)} of ${symbol} due to DANGER status`
       : `Action approved: ${action} $${swapAmountUSD.toFixed(2)} of ${symbol}`,
-    swapAmountUSD,
+    swapAmountUSD: isDangerSell ? dangerSellAmountUSD : swapAmountUSD,
   }
 }
 
@@ -263,11 +342,17 @@ type ExecuteSwapParams = {
   price: number
   reasoning: string
   stablecoinSymbol: string
+  balance: {
+    symbol: string
+    rawBalance: bigint
+    decimals: number
+    formatted: number
+    isHeld: boolean
+  }
 }
 
 async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
-  const { symbol, action, verdict, amountUSD, userAddress, price, reasoning, stablecoinSymbol } =
-    params
+  const { symbol, action, verdict, amountUSD, userAddress, price, reasoning, stablecoinSymbol, balance } = params
 
   const coin = getCoin(symbol)
 
@@ -275,23 +360,26 @@ async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
     const calldata =
       action === 'SELL'
         ? buildSellToStable({
-            tokenAddress: coin.baseAddress,
-            tokenDecimals: coin.decimals,
-            amountInUSD: amountUSD,
-            tokenPriceUSD: price,
-            recipient: userAddress,
-            stablecoinSymbol,
-          })
+          tokenAddress: coin.baseAddress,
+          tokenDecimals: coin.decimals,
+          amountInUSD: amountUSD,
+          tokenPriceUSD: price,
+          recipient: userAddress,
+          stablecoinSymbol,
+          tokenBalanceRaw: balance.rawBalance,
+          isNative: symbol === 'ETH',
+        })
         : buildBuyWithStable({
-            tokenAddress: coin.baseAddress,
-            amountInUSD: amountUSD,
-            recipient: userAddress,
-            stablecoinSymbol,
-          })
+          tokenAddress: coin.baseAddress,
+          amountInUSD: amountUSD,
+          recipient: userAddress,
+          stablecoinSymbol,
+        })
 
-    const relay = await relayTransaction({
+    const relay = await relayUniswapSwap({
       to: calldata.to,
       data: calldata.data,
+      value: calldata.value,
       userAddress,
       chainId: IS_TESTNET ? 11155111 : 1,
     })

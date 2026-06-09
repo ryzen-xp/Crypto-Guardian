@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ConnectButton } from '@rainbow-me/rainbowkit'
+import ConnectWalletButton from '@/components/wallet/ConnectWalletButton'
 
 export const dynamic = 'force-dynamic'
 import { Shield, LayoutDashboard, Settings, Pause, Play, Activity } from 'lucide-react'
@@ -99,7 +99,7 @@ export default function Header() {
           </button>
 
           {/* Wallet */}
-          <ConnectButton accountStatus="avatar" chainStatus="icon" showBalance={false} />
+          <ConnectWalletButton />
         </div>
       </div>
     </header>

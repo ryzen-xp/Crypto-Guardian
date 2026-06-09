@@ -1,22 +1,9 @@
 import crypto from 'crypto'
+import { formatUnits, parseUnits } from 'viem'
+import { IS_TESTNET } from './chain-config'
 import type { RelayResult } from './types'
 
-const ONESHOT_BASE_URL = process.env.ONESHOT_API_URL ?? 'https://api.1shotapi.com'
-
-function getApiKey(): string {
-  const key = process.env.ONESHOT_API_KEY
-  if (!key) {
-    if (
-      process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
-      process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
-    ) {
-      return 'mock_key'
-    }
-    throw new Error('ONESHOT_API_KEY environment variable is not set')
-  }
-  return key
-}
-
+// 1Shot uses JSON-RPC, not REST
 function getMockRelayResult(relayId?: string): RelayResult {
   return {
     relayId: relayId ?? `relay_${Math.random().toString(36).substring(2, 11)}`,
@@ -48,61 +35,365 @@ type OneShotRelayResponse = {
   estimatedGasUSDC: string
 }
 
+type RelayerCall = {
+  target: string
+  value: string
+  data: string
+}
+
+type RelayerFeeData = {
+  chainId: string
+  token: {
+    address: string
+    decimals: number
+    symbol?: string
+    name?: string
+  }
+  rate: number
+  minFee: string
+  expiry?: number
+  gasPrice?: string
+  feeCollector?: string
+  targetAddress?: string
+  context?: string
+}
+
+type RelayerQuoteResponse = {
+  gasUsed?: string
+  gasUsedL1?: string
+  gasPrice?: string
+  fee?: {
+    amount: string
+    rate?: number
+    token?: {
+      address: string
+      decimals: number | string
+      symbol?: string
+      name?: string
+    }
+  }
+  relayer_payment_address?: string
+  relayerCalls?: RelayerCall[]
+  revert_reason?: string
+}
+
+type Relayer7710Execution = {
+  target: string
+  value: string
+  data: string
+}
+
+type Relayer7710Delegation = Record<string, unknown>
+
+type Relayer7710Bundle = {
+  permissionContext: Relayer7710Delegation[]
+  executions: Relayer7710Execution[]
+}
+
+type RelayerTokenInfo = {
+  address: string
+  symbol: string
+  decimals: string
+}
+
+type RelayerCapabilities = {
+  feeCollector?: string
+  targetAddress?: string
+  tokens?: RelayerTokenInfo[]
+}
+
+type Relayer7710Transaction = {
+  chainId: string
+  transactions: Relayer7710Bundle[]
+  taskId?: string
+}
+
+function getRelayerUrl(chainId: number): string {
+  return IS_TESTNET || chainId === 11155111
+    ? 'https://relayer.1shotapi.dev/relayers'
+    : 'https://relayer.1shotapi.com/relayers'
+}
+
+async function fetchRelayerJson(body: unknown, relayerUrl: string) {
+  const res = await fetch(relayerUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const json = await res.json().catch(() => null)
+  return { res, json }
+}
+
+async function getRelayerCapabilities(chainId: number): Promise<RelayerCapabilities | null> {
+  const relayerUrl = getRelayerUrl(chainId)
+  const body = {
+    jsonrpc: '2.0',
+    id: Math.random().toString(36).substring(2, 11),
+    method: 'relayer_getCapabilities',
+    params: [String(chainId)],
+  }
+
+  const { res, json } = await fetchRelayerJson(body, relayerUrl)
+  if (!res.ok || !json) return null
+  const caps = json.result?.[String(chainId)] as RelayerCapabilities | undefined
+  return caps ?? null
+}
+
+async function getRelayerFeeData(chainId: number, tokenAddress: string): Promise<RelayerFeeData | null> {
+  const relayerUrl = getRelayerUrl(chainId)
+  const body = {
+    jsonrpc: '2.0',
+    id: Math.random().toString(36).substring(2, 11),
+    method: 'relayer_getFeeData',
+    params: {
+      chainId: String(chainId),
+      token: tokenAddress,
+    },
+  }
+
+  const { res, json } = await fetchRelayerJson(body, relayerUrl)
+  if (!res.ok || !json?.result) return null
+  return json.result as RelayerFeeData
+}
+
+async function getRelayerQuote(
+  chainId: number,
+  transaction: Relayer7710Transaction,
+  paymentToken: string
+): Promise<RelayerQuoteResponse | null> {
+  const relayerUrl = getRelayerUrl(chainId)
+  const body = {
+    jsonrpc: '2.0',
+    id: Math.random().toString(36).substring(2, 11),
+    method: 'relayer_getQuote',
+    params: [
+      {
+        ...transaction,
+        capabilities: {
+          payment: {
+            type: 'erc20',
+            token: paymentToken,
+          },
+        },
+      },
+    ],
+  }
+
+  const { res, json } = await fetchRelayerJson(body, relayerUrl)
+  if (!res.ok || !json) return null
+  if (json.error) return null
+  return json.result as RelayerQuoteResponse
+}
+
+type Relayer7710EstimateResponse = {
+  success?: boolean
+  requiredPaymentAmount?: string
+  gasUsed?: Record<string, string> | string
+  context?: string
+  contextByChainId?: Record<string, string>
+  error?: unknown
+}
+
+async function estimateRelayerTransaction(
+  chainId: number,
+  transaction: Relayer7710Transaction,
+  paymentToken: string
+): Promise<Relayer7710EstimateResponse | null> {
+  const relayerUrl = getRelayerUrl(chainId)
+  const body = {
+    jsonrpc: '2.0',
+    id: Math.random().toString(36).substring(2, 11),
+    method: 'relayer_estimate7710Transaction',
+    params: [
+      {
+        ...transaction,
+        payment: { type: 'token', address: paymentToken },
+      },
+    ],
+  }
+
+  const { res, json } = await fetchRelayerJson(body, relayerUrl)
+  if (!res.ok || !json) return null
+  if (json.error) return null
+  return json.result as Relayer7710EstimateResponse
+}
+
+async function sendRelayerTransaction(
+  chainId: number,
+  transaction: Relayer7710Transaction,
+  paymentToken: string,
+  context?: string
+): Promise<string | null> {
+  const relayerUrl = getRelayerUrl(chainId)
+  const body = {
+    jsonrpc: '2.0',
+    id: Math.random().toString(36).substring(2, 11),
+    method: 'relayer_send7710Transaction',
+    params: {
+      ...transaction,
+      payment: { type: 'token', address: paymentToken },
+      ...(context ? { context } : {}),
+    },
+  }
+
+  console.warn(`[1Shot] Sending JSON-RPC request to ${relayerUrl}`)
+  console.warn(`[1Shot] Method: relayer_send7710Transaction`)
+  console.warn(`[1Shot] Request body: ${JSON.stringify(body)}`)
+
+  const { res, json } = await fetchRelayerJson(body, relayerUrl)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`1Shot sendTransaction error ${res.status}: ${text}`)
+  }
+
+  if (json?.error) {
+    throw new Error(`1Shot sendTransaction failed: ${JSON.stringify(json.error)}`)
+  }
+
+  if (typeof json?.result === 'string') return json.result
+
+  if (json?.result && typeof json.result === 'object') {
+    const result = json.result as { id?: string; taskId?: string }
+    return result.id ?? result.taskId ?? null
+  }
+
+  return null
+}
+
+function parseAmountToBigInt(value: string | number | bigint): bigint {
+  if (typeof value === 'bigint') return value
+  if (typeof value === 'number') return BigInt(Math.trunc(value))
+  const trimmed = value.trim()
+  return trimmed.startsWith('0x') ? BigInt(trimmed) : BigInt(trimmed)
+}
+
 // ─── Relay Transaction ────────────────────────────────────────────────────────
 
 /**
- * Submit a transaction to the 1Shot relayer.
+ * Submit a transaction to the 1Shot relayer via JSON-RPC.
  * Gas is paid in USDC from the user's Smart Account.
+ * 
+ * 1Shot uses JSON-RPC API, not REST:
+ * - Mainnet: https://relayer.1shotapi.com/relayers
+ * - Testnet: https://relayer.1shotapi.dev/relayers
  */
-export async function relayTransaction(params: RelayParams): Promise<RelayResult> {
-  const { to, data, value = '0x0', userAddress, chainId } = params
+export async function relayTransaction(
+  params: RelayParams,
+  capabilities?: RelayerCapabilities | null,
+  context?: string
+): Promise<RelayResult> {
+  const { to, data, value = '0x0', chainId } = params
+  const transaction: Relayer7710Transaction = {
+    chainId: String(chainId),
+    transactions: [
+      {
+        permissionContext: [],
+        executions: [
+          {
+            target: to,
+            value,
+            data,
+          },
+        ],
+      },
+    ],
+  }
 
   try {
-    const res = await fetch(`${ONESHOT_BASE_URL}/v1/relay`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${getApiKey()}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        to,
-        data,
-        value,
-        from: userAddress,
-        chainId,
-      }),
-    })
-
-    if (!res.ok) {
-      const text = await res.text()
-      if (
-        process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
-        process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
-      ) {
-        console.warn(
-          `[1Shot] Relayer returned error ${res.status}. Falling back to simulation mode because NEXT_PUBLIC_DEMO_MODE or NEXT_PUBLIC_IS_TESTNET is active.`
-        )
+    // Discover relayer capabilities and payment token
+    const relayerCapabilities = capabilities ?? await getRelayerCapabilities(chainId)
+    if (!relayerCapabilities || !relayerCapabilities.tokens?.length) {
+      console.error(
+        `[1Shot] No supported payment tokens available for chain ${chainId}. Capabilities: ${JSON.stringify(relayerCapabilities)}`
+      )
+      if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true' || process.env.NEXT_PUBLIC_IS_TESTNET === 'true') {
         return getMockRelayResult()
       }
-      throw new Error(`1Shot relay error ${res.status}: ${text}`)
+      throw new Error('1Shot relayer has no supported payment token for this chain.')
     }
 
-    const result = (await res.json()) as OneShotRelayResponse
+    const paymentToken = relayerCapabilities.tokens?.[0]?.address
+    if (!paymentToken) {
+      console.error(`[1Shot] Relayer capabilities missing token address: ${JSON.stringify(relayerCapabilities)}`)
+      if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true' || process.env.NEXT_PUBLIC_IS_TESTNET === 'true') {
+        return getMockRelayResult()
+      }
+      throw new Error('1Shot relayer capabilities returned no payment token address.')
+    }
+    console.warn(`[1Shot] Using payment token from capabilities: ${paymentToken}`)
+    if (relayerCapabilities.targetAddress) {
+      console.warn(`[1Shot] Relayer target address available: ${relayerCapabilities.targetAddress}`)
+    }
+
+    const feeData = await getRelayerFeeData(chainId, paymentToken)
+    const tokenDecimals = relayerCapabilities.tokens?.[0]?.decimals ? Number(relayerCapabilities.tokens[0].decimals) : 6
+
+    const minFeeAmount = feeData?.minFee
+      ? parseUnits(feeData.minFee, tokenDecimals)
+      : BigInt(0)
+
+    let feeAmount = minFeeAmount
+    const estimateResult = await estimateRelayerTransaction(chainId, transaction, paymentToken)
+    const quoteResult = await getRelayerQuote(chainId, transaction, paymentToken)
+    if (estimateResult?.success !== false) {
+      const estimatedPayment = estimateResult?.requiredPaymentAmount
+      if (estimatedPayment) {
+        feeAmount = parseAmountToBigInt(estimatedPayment)
+      } else if (quoteResult?.fee?.amount) {
+        feeAmount = parseAmountToBigInt(quoteResult.fee.amount)
+      }
+    } else if (quoteResult?.fee?.amount) {
+      feeAmount = parseAmountToBigInt(quoteResult.fee.amount)
+    }
+
+    const contextToUse =
+      estimateResult?.context ??
+      (estimateResult?.contextByChainId ? estimateResult.contextByChainId[String(chainId)] : undefined) ??
+      feeData?.context ??
+      context
+    const taskId = await sendRelayerTransaction(
+      chainId,
+      transaction,
+      paymentToken,
+      contextToUse ?? undefined
+    )
+    if (!taskId) {
+      throw new Error('1Shot relayer returned empty task id for transaction')
+    }
+
+    const estimatedGasUSDC = formatUnits(feeAmount, tokenDecimals)
 
     return {
-      relayId: result.relayId,
-      status: result.status === 'confirmed' ? 'confirmed' : 'pending',
-      txHash: result.txHash,
-      estimatedGasUSDC: result.estimatedGasUSDC,
+      relayId: taskId,
+      status: 'pending',
+      estimatedGasUSDC,
     }
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    console.error(`[1Shot] Full error: ${errorMsg}`)
+
     if (
       process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
       process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
     ) {
       console.warn(
-        `[1Shot] Relayer failed: ${error instanceof Error ? error.message : String(error)}. Falling back to simulation mode.`
+        `[1Shot] Relayer failed: ${errorMsg}. Falling back to simulation mode.`
       )
+      return getMockRelayResult()
+    }
+    throw error
+  }
+}
+
+export async function relayUniswapSwap(params: RelayParams): Promise<RelayResult> {
+  try {
+    return await relayTransaction(params)
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    console.error(`[1Shot] relayUniswapSwap failed: ${errorMsg}`)
+
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true' || process.env.NEXT_PUBLIC_IS_TESTNET === 'true') {
+      console.warn('[1Shot] Falling back to simulation mode due to relayUniswapSwap failure.')
       return getMockRelayResult()
     }
     throw error
@@ -113,10 +404,29 @@ export async function relayTransaction(params: RelayParams): Promise<RelayResult
 
 export async function getRelayStatus(relayId: string): Promise<RelayResult> {
   try {
-    const res = await fetch(`${ONESHOT_BASE_URL}/v1/relay/${relayId}`, {
+    const relayerUrl = IS_TESTNET
+      ? 'https://relayer.1shotapi.dev/relayers'
+      : 'https://relayer.1shotapi.com/relayers'
+
+    const jsonRpcBody = {
+      jsonrpc: '2.0',
+      id: Math.random().toString(36).substring(2, 11),
+      method: 'relayer_getStatus',
+      // relayer_getStatus expects an object: { id: TaskId, logs: boolean }
+      params: [
+        {
+          id: relayId,
+          logs: false,
+        },
+      ],
+    }
+
+    const res = await fetch(relayerUrl, {
+      method: 'POST',
       headers: {
-        Authorization: `Bearer ${getApiKey()}`,
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify(jsonRpcBody),
     })
 
     if (!res.ok) {
@@ -132,18 +442,37 @@ export async function getRelayStatus(relayId: string): Promise<RelayResult> {
       throw new Error(`1Shot status check error ${res.status}`)
     }
 
-    const result = (await res.json()) as OneShotRelayResponse
+    const result = (await res.json()) as { result?: OneShotRelayResponse; error?: unknown }
+
+    if (result.error) {
+      if (
+        process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+        process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+      ) {
+        console.warn(
+          `[1Shot] Status check failed: ${JSON.stringify(result.error)}. Returning simulated confirmed status.`
+        )
+        return getMockRelayResult(relayId)
+      }
+      throw new Error(`1Shot status check failed: ${JSON.stringify(result.error)}`)
+    }
+
+    if (!result.result) {
+      throw new Error('1Shot status check returned empty result')
+    }
+
+    const relayResult = result.result
 
     return {
-      relayId: result.relayId,
+      relayId: relayResult.relayId,
       status:
-        result.status === 'confirmed'
+        relayResult.status === 'confirmed'
           ? 'confirmed'
-          : result.status === 'failed'
+          : relayResult.status === 'failed'
             ? 'failed'
             : 'pending',
-      txHash: result.txHash,
-      estimatedGasUSDC: result.estimatedGasUSDC,
+      txHash: relayResult.txHash,
+      estimatedGasUSDC: relayResult.estimatedGasUSDC,
     }
   } catch (error) {
     if (
@@ -164,37 +493,29 @@ export async function getRelayStatus(relayId: string): Promise<RelayResult> {
 /**
  * Upgrade a regular EOA to a Smart Account via 1Shot's EIP-7702 upgrade.
  * Returns the Smart Account address (same as original address).
+ * 
+ * NOTE: The EIP-7702 upgrade endpoint is not part of the public relayer.
+ * This is a placeholder that gracefully falls back to demo mode.
  */
 export async function upgradeAccountEIP7702(walletAddress: string): Promise<string> {
   try {
-    const res = await fetch(`${ONESHOT_BASE_URL}/v1/upgrade`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${getApiKey()}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        address: walletAddress,
-        chainId: process.env.NEXT_PUBLIC_IS_TESTNET === 'true' ? 11155111 : 1,
-      }),
-    })
+    console.warn(
+      '[1Shot] EIP-7702 upgrade requires 1Shot Dev Platform API key (not public relayer)'
+    )
 
-    if (!res.ok) {
-      const text = await res.text()
-      if (
-        process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
-        process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
-      ) {
-        console.warn(
-          `[1Shot] EIP-7702 upgrade returned error ${res.status}. Falling back to simulation mode.`
-        )
-        return walletAddress
-      }
-      throw new Error(`1Shot EIP-7702 upgrade error ${res.status}: ${text}`)
+    if (
+      process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
+      process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
+    ) {
+      console.warn(
+        '[1Shot] Demo mode active — skipping EIP-7702 upgrade and returning original address'
+      )
+      return walletAddress
     }
 
-    const result = (await res.json()) as { smartAccountAddress: string; txHash: string }
-    return result.smartAccountAddress
+    throw new Error(
+      'EIP-7702 upgrade requires ONESHOT_API_KEY (Dev Platform access). In testnet/demo mode, upgrade is skipped.'
+    )
   } catch (error) {
     if (
       process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
