@@ -32,7 +32,7 @@ const VERDICT_DOT: Record<string, string> = {
   CAUTION: '🟡',
 }
 
-const COINS = ['ETH', 'WBTC', 'ARB', 'OP']
+const COINS = ['ETH', 'WBTC', 'LINK', 'UNI']
 
 function getVerdict(change1h: number, change24h: number): string {
   if (change1h < -8 || change24h < -15) return 'DANGER'

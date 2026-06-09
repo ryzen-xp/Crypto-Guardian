@@ -32,16 +32,16 @@ const ERC20_ABI = [
 // Testnet thresholds are very low — faucet drips are tiny
 const DUST_THRESHOLDS: Record<string, number> = IS_TESTNET
   ? {
-      ETH: 0.0001, // any Sepolia faucet amount (usually 0.1–0.5 ETH)
-      WBTC: 0.000001,
-      ARB: 0.01,
-      OP: 0.01,
+      ETH: 0.0001,   // any Sepolia faucet drip (0.05–0.5 ETH) qualifies
+      WBTC: 0.000001, // Aave testnet WBTC (8 decimals) — very small amounts count
+      LINK: 0.01,    // Chainlink faucet gives 10–20 LINK per request
+      UNI: 0.01,     // Uniswap faucet / transfers
     }
   : {
       ETH: 0.001,
       WBTC: 0.00001,
-      ARB: 1.0,
-      OP: 1.0,
+      LINK: 1.0,
+      UNI: 1.0,
     }
 
 export type WalletBalance = {
@@ -109,7 +109,7 @@ export async function fetchWalletBalances(walletAddress: string): Promise<Wallet
         )
         // If balance check fails (contract not deployed on testnet, etc.)
         // mark as not held rather than crashing — this is expected on Sepolia
-        // for WBTC, ARB, OP which rarely have real testnet deployments
+        // for WBTC/LINK/UNI — rare testnet deployment issues are handled gracefully
         results[coin.symbol] = {
           symbol: coin.symbol,
           rawBalance: BigInt(0),

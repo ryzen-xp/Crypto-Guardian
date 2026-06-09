@@ -13,7 +13,6 @@ export const UNISWAP_V3_ROUTER = (
 ) as `0x${string}`
 
 // ─── Uniswap V2 Router02 ──────────────────────────────────────────────────────
-// Official Uniswap deployments (Sepolia) from docs.uniswap.org
 // Sepolia: 0xeE567Fe1712Faf6149d80dA1E6934E354124CfE3
 // Mainnet: 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D
 
@@ -76,9 +75,16 @@ export function getStablecoin(symbol: string): StablecoinConfig {
   return stable
 }
 
-// ─── Monitored Coins — ETH, WBTC, ARB, OP ────────────────────────────────────
-// Ethereum Sepolia testnet uses well-known Aave/Chainlink test token addresses.
-// Ethereum Mainnet uses canonical token addresses.
+// ─── Monitored Coins — ETH, WETH, WBTC, LINK, UNI ──────────────────────────
+// All five tokens have verified contracts AND faucet liquidity on Ethereum Sepolia.
+// Note: ETH balance is fetched as native (getBalance), WETH as ERC-20 (balanceOf).
+//
+// Sepolia addresses:
+//   ETH  → native ETH (getBalance)
+//   WETH → 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14  (Uniswap WETH9 — canonical)
+//   WBTC → 0x29f2D40B0605204364af54EC677bD022dA425d03  (Aave testnet WBTC)
+//   LINK → 0x779877A7B0D9E8603169DdbD7836e478b4624789  (Chainlink official faucet)
+//   UNI  → 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984  (same across networks)
 
 export const MONITORED_COINS: Record<string, CoinConfig> = IS_TESTNET
   ? {
@@ -86,30 +92,48 @@ export const MONITORED_COINS: Record<string, CoinConfig> = IS_TESTNET
       symbol: 'ETH',
       name: 'Ethereum',
       coingeckoId: 'ethereum',
-      // WETH on Ethereum Sepolia
+      // ETH is native — balance fetched via getBalance(), not balanceOf()
+      // baseAddress is unused for ETH but kept for swap routing
       baseAddress: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',
       decimals: 18,
       logoUrl: '/coin-icons/eth.svg',
       isWrapped: true,
     },
-
-    ARB: {
-      symbol: 'ARB',
-      name: 'Arbitrum',
-      coingeckoId: 'arbitrum',
-      // Aave testnet ARB on Ethereum Sepolia
-      baseAddress: '0x2F0b7a2a7B0D3D0D39a3d39a69b5D1F2A0b7a2a7',
+    WETH: {
+      symbol: 'WETH',
+      name: 'Wrapped Ether',
+      coingeckoId: 'weth',
+      // Canonical WETH9 on Ethereum Sepolia — wrap ETH at app.uniswap.org
+      baseAddress: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',
       decimals: 18,
-      logoUrl: '/coin-icons/arb.svg',
+      logoUrl: '/coin-icons/eth.svg',
     },
-    OP: {
-      symbol: 'OP',
-      name: 'Optimism',
-      coingeckoId: 'optimism',
-      // Aave testnet OP on Ethereum Sepolia
-      baseAddress: '0x4B0F1812e5Df2A09796481Ff14017e6005508003',
+    WBTC: {
+      symbol: 'WBTC',
+      name: 'Wrapped Bitcoin',
+      coingeckoId: 'wrapped-bitcoin',
+      // Aave testnet WBTC on Ethereum Sepolia — mintable via app.aave.com/faucet
+      baseAddress: '0x29f2D40B0605204364af54EC677bD022dA425d03',
+      decimals: 8,
+      logoUrl: '/coin-icons/wbtc.svg',
+    },
+    LINK: {
+      symbol: 'LINK',
+      name: 'Chainlink',
+      coingeckoId: 'chainlink',
+      // Official Chainlink token on Ethereum Sepolia — obtainable via faucets.chain.link
+      baseAddress: '0x779877A7B0D9E8603169DdbD7836e478b4624789',
       decimals: 18,
-      logoUrl: '/coin-icons/op.svg',
+      logoUrl: '/coin-icons/link.svg',
+    },
+    UNI: {
+      symbol: 'UNI',
+      name: 'Uniswap',
+      coingeckoId: 'uniswap',
+      // Uniswap governance token — same address on all networks
+      baseAddress: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984',
+      decimals: 18,
+      logoUrl: '/coin-icons/uni.svg',
     },
   }
   : {
@@ -123,24 +147,32 @@ export const MONITORED_COINS: Record<string, CoinConfig> = IS_TESTNET
       logoUrl: '/coin-icons/eth.svg',
       isWrapped: true,
     },
-
-    ARB: {
-      symbol: 'ARB',
-      name: 'Arbitrum',
-      coingeckoId: 'arbitrum',
-      // ARB on Ethereum Mainnet
-      baseAddress: '0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1',
-      decimals: 18,
-      logoUrl: '/coin-icons/arb.svg',
+    WBTC: {
+      symbol: 'WBTC',
+      name: 'Wrapped Bitcoin',
+      coingeckoId: 'wrapped-bitcoin',
+      // WBTC on Ethereum Mainnet
+      baseAddress: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599',
+      decimals: 8,
+      logoUrl: '/coin-icons/wbtc.svg',
     },
-    OP: {
-      symbol: 'OP',
-      name: 'Optimism',
-      coingeckoId: 'optimism',
-      // OP on Ethereum Mainnet
-      baseAddress: '0x4200000000000000000000000000000000000042',
+    LINK: {
+      symbol: 'LINK',
+      name: 'Chainlink',
+      coingeckoId: 'chainlink',
+      // LINK on Ethereum Mainnet
+      baseAddress: '0x514910771AF9Ca656af840dff83E8264EcF986CA',
       decimals: 18,
-      logoUrl: '/coin-icons/op.svg',
+      logoUrl: '/coin-icons/link.svg',
+    },
+    UNI: {
+      symbol: 'UNI',
+      name: 'Uniswap',
+      coingeckoId: 'uniswap',
+      // UNI on Ethereum Mainnet
+      baseAddress: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984',
+      decimals: 18,
+      logoUrl: '/coin-icons/uni.svg',
     },
   }
 

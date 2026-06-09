@@ -7,7 +7,7 @@ const isTestnet = process.env.NEXT_PUBLIC_IS_TESTNET === 'true'
 export const metadata: Metadata = {
   title: `CryptoGuardian — AI Portfolio Protection${isTestnet ? ' (Testnet)' : ''}`,
   description:
-    'AI-powered portfolio protection agent. Monitors ETH, WBTC, ARB and OP every 15 minutes. Auto-swaps to safety on danger.',
+    'AI-powered portfolio protection agent. Monitors ETH, WBTC, LINK and UNI every 15 minutes. Auto-swaps to safety on danger.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

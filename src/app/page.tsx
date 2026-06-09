@@ -65,7 +65,7 @@ export default function LandingPage() {
           </h1>
 
           <p className="mx-auto mb-10 max-w-2xl text-lg leading-relaxed text-gray-400">
-            AI monitors ETH, WBTC, ARB and OP every 15 minutes. When danger hits, it auto-swaps to
+            AI monitors ETH, WBTC, LINK and UNI every 15 minutes. When danger hits, it auto-swaps to
             USDC or USDT — no manual signing, no gas fees, no sleepless nights.
           </p>
 
@@ -148,7 +148,7 @@ export default function LandingPage() {
           <div className="grid gap-16 lg:grid-cols-2">
             {/* Coins */}
             <div>
-              <h2 className="mb-2 text-2xl font-bold">4 Major EVM Assets</h2>
+              <h2 className="mb-2 text-2xl font-bold">4 EVM Tokens on Sepolia</h2>
               <p className="mb-8 text-sm text-gray-400">
                 The blue chips and high-volatility L2s that move markets.
               </p>

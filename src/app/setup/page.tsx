@@ -377,7 +377,7 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
                         No monitored assets found
                       </p>
                       <p className="mt-1 text-xs text-gray-400">
-                        Your wallet doesn&apos;t hold ETH, WBTC, ARB or OP on {CHAIN_CONFIG.name}.
+                        Your wallet doesn&apos;t hold ETH, WBTC, LINK or UNI on {CHAIN_CONFIG.name}.
                       </p>
                       {CHAIN_CONFIG.isTestnet && (
                         <a
