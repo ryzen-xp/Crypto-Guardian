@@ -6,6 +6,7 @@ type Props = {
   totalSwaps: number
   nextRunAt: Date | null
   fearGreed: { value: number; label: string }
+  nextScanAsset?: string | null
 }
 
 function FearGreedBar({ value }: { value: number }) {
@@ -54,7 +55,7 @@ function CountdownTimer({ targetDate }: { targetDate: Date }) {
   return <span>{formatted}</span>
 }
 
-export default function StatsBar({ totalProtectedUSD, totalSwaps, nextRunAt, fearGreed }: Props) {
+export default function StatsBar({ totalProtectedUSD, totalSwaps, nextRunAt, fearGreed, nextScanAsset }: Props) {
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
@@ -83,6 +84,11 @@ export default function StatsBar({ totalProtectedUSD, totalSwaps, nextRunAt, fea
         <div className="font-mono text-xl font-bold text-yellow-400">
           {nextRunAt ? <CountdownTimer targetDate={new Date(nextRunAt)} /> : '—'}
         </div>
+        {nextRunAt && nextScanAsset && (
+          <div className="mt-1 text-xs text-gray-500">
+            Targeting: <span className="font-semibold text-gray-300">{nextScanAsset}</span>
+          </div>
+        )}
       </div>
 
       <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">

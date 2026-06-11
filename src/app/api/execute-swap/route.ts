@@ -3,7 +3,8 @@ import { buildSellToStable, buildBuyWithStable } from '@/lib/uniswap'
 import { relayUniswapSwap } from '@/lib/oneshot'
 import { CHAIN_ID } from '@/lib/chain-config'
 import { getCoin, DEFAULT_STABLECOIN, STABLECOINS } from '@/lib/coins'
-import { fetchWalletBalances } from '@/lib/balances'
+import { fetchWalletBalances, MINIMUM_MONITOR_USD } from '@/lib/balances'
+import { fetchAllPrices } from '@/lib/market-data'
 
 type RequestBody = {
   userAddress: string
@@ -46,8 +47,22 @@ export async function POST(req: NextRequest) {
     }
 
     const coin = getCoin(coinSymbol)
-    const walletBalances = await fetchWalletBalances(userAddress)
+    const prices = await fetchAllPrices()
+    const walletBalances = await fetchWalletBalances(userAddress, prices)
     const balance = walletBalances[coinSymbol]
+    const balanceUSD = (balance?.formatted ?? 0) * tokenPriceUSD
+
+    // Check if balance is above minimum monitoring threshold
+    if (balanceUSD < MINIMUM_MONITOR_USD) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `${coinSymbol} balance ($${balanceUSD.toFixed(2)}) is below minimum monitoring threshold ($${MINIMUM_MONITOR_USD.toFixed(2)}). Monitoring stopped for this asset.`,
+          code: 'BALANCE_TOO_LOW',
+        },
+        { status: 400 }
+      )
+    }
 
     if (action === 'SELL' && !balance?.isHeld) {
       return NextResponse.json(
@@ -87,7 +102,7 @@ export async function POST(req: NextRequest) {
       chainId: CHAIN_ID,
     })
 
-    console.warn(`[execute-swap] Swap relay successful: ${relay.relayId}`)
+    console.warn(`[execute-swap] Real swap executed via 1Shot: ${relay.relayId}`)
     return NextResponse.json({ success: true, data: relay })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

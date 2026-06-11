@@ -5,55 +5,75 @@ import { fetchAllCoinNews, analyzeMarket } from './venice'
 import { buildSellToStable, buildBuyWithStable } from './uniswap'
 import { relayUniswapSwap } from './oneshot'
 import { IS_TESTNET } from './chain-config'
-import type { AgentAction, AgentLoopResult, CoinSettings, Verdict } from './types'
+import { shouldSwapBasedOnPosition, getUserPositions, calculatePositionPnL } from './positions'
+import type { AgentAction, AgentLoopResult, CoinSettings, TerminalLine, TerminalLineType, Verdict } from './types'
 
-// ─── Cooldown ─────────────────────────────────────────────────────────────────
+// ─── Cooldown intervals ────────────────────────────────────────────────────────
+const INTERVAL_DANGER_MS        = 30  * 1000   //  30s  — DANGER assets re-checked urgently
+const INTERVAL_CAUTION_MS       = 60  * 1000   //  60s  — CAUTION warrants close watch
+const INTERVAL_OPPORTUNITY_MS   = 75  * 1000   //  75s  — OPPORTUNITY tracked closely
+const INTERVAL_NEUTRAL_MS       = 100 * 1000   // 100s  — stable assets, lower priority
+const LOCAL_ANALYZER_BACKOFF_MS = 5   * 60 * 1000
+const HOLDING_EMPTY_BACKOFF_MS  = 60  * 60 * 1000
+const FAILED_SWAP_BACKOFF_MS    = 5   * 60 * 1000
+const SINGLE_DRAIN_BACKOFF_MS   = 30  * 60 * 1000
 
-const LOOP_INTERVAL_MS = 100 * 1000 // 100 seconds
-const LOCAL_ANALYZER_BACKOFF_MS = 5 * 60 * 1000
-const HOLDING_EMPTY_BACKOFF_MS = 60 * 60 * 1000
-const SINGLE_ASSET_DRAIN_BACKOFF_MS = 30 * 60 * 1000
-const FAILED_SWAP_BACKOFF_MS = 5 * 60 * 1000
 let lastRunAt: Date | null = null
 let nextAllowedRunAt: Date | null = null
 
-export function getLastRunAt(): Date | null {
-  return lastRunAt
-}
+// ─── Per-coin priority scores (persist between scans in same server session) ──
+// 4 = DANGER (re-check most urgently), 3 = OPPORTUNITY, 2 = CAUTION, 1 = NEUTRAL
+const coinPriorityScores: Record<string, number> = {}
 
-export function getNextRunAt(): Date {
-  return nextAllowedRunAt ?? new Date()
-}
-
+export function getLastRunAt(): Date | null { return lastRunAt }
+export function getNextRunAt(): Date { return nextAllowedRunAt ?? new Date() }
 export function isOnCooldown(): boolean {
   if (!nextAllowedRunAt) return false
   return Date.now() < nextAllowedRunAt.getTime()
 }
 
+function verdictToPriority(verdict: Verdict): number {
+  return verdict === 'DANGER' ? 4 : verdict === 'OPPORTUNITY' ? 3 : verdict === 'CAUTION' ? 2 : 1
+}
+
+/** Sort coins so highest-priority (most risky from last scan) go first */
+function sortByPriority(coins: string[]): string[] {
+  return [...coins].sort((a, b) => (coinPriorityScores[b] ?? 1) - (coinPriorityScores[a] ?? 1))
+}
+
+function worstVerdict(verdicts: Record<string, Verdict>, coins: string[]): Verdict {
+  const order: Verdict[] = ['DANGER', 'OPPORTUNITY', 'CAUTION', 'NEUTRAL']
+  for (const v of order) {
+    if (coins.some((s) => verdicts[s] === v)) return v
+  }
+  return 'NEUTRAL'
+}
+
 function calculateNextRunAt(params: {
-  heldCoinCount: number
   usedLocalAnalyser: boolean
   actionTaken: AgentAction | null
+  worst: Verdict
 }): Date {
   const now = Date.now()
+  if (params.actionTaken?.status === 'failed') return new Date(now + FAILED_SWAP_BACKOFF_MS)
+  if (params.usedLocalAnalyser) return new Date(now + LOCAL_ANALYZER_BACKOFF_MS)
 
-  if (params.heldCoinCount === 0) {
-    return new Date(now + HOLDING_EMPTY_BACKOFF_MS)
+  // Priority-adaptive intervals
+  if (params.worst === 'DANGER')      return new Date(now + INTERVAL_DANGER_MS)
+  if (params.worst === 'CAUTION')     return new Date(now + INTERVAL_CAUTION_MS)
+  if (params.worst === 'OPPORTUNITY') return new Date(now + INTERVAL_OPPORTUNITY_MS)
+  return new Date(now + INTERVAL_NEUTRAL_MS)
+}
+
+// ─── Terminal log builder ──────────────────────────────────────────────────────
+
+function makeLogger() {
+  const lines: TerminalLine[] = []
+  let seq = 0
+  const add = (type: TerminalLineType, content: string, coin?: string) => {
+    lines.push({ id: `${Date.now()}-${++seq}`, ts: new Date().toISOString(), type, content, coin })
   }
-
-  if (params.actionTaken?.status === 'failed') {
-    return new Date(now + FAILED_SWAP_BACKOFF_MS)
-  }
-
-  if (params.actionTaken?.status === 'confirmed' && params.heldCoinCount === 1) {
-    return new Date(now + SINGLE_ASSET_DRAIN_BACKOFF_MS)
-  }
-
-  if (params.usedLocalAnalyser) {
-    return new Date(now + LOCAL_ANALYZER_BACKOFF_MS)
-  }
-
-  return new Date(now + LOOP_INTERVAL_MS)
+  return { add, lines: () => lines }
 }
 
 // ─── Agent Loop ───────────────────────────────────────────────────────────────
@@ -62,20 +82,10 @@ type AgentLoopParams = {
   userAddress: string
   activeCoins: string[]
   coinSettings: CoinSettings
-  /** Symbol of the user's chosen stablecoin (USDC, USDT, DAI, USDbC) */
   stablecoinSymbol: string
   forceRun?: boolean
 }
 
-/**
- * Main agent loop — runs the full 15-minute cycle:
- * 1. Fetch market data
- * 2. Fetch news per coin
- * 3. Analyze with Venice AI
- * 4. Check user rules
- * 5. Execute swap if needed
- * 6. Return full result for dashboard
- */
 export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopResult> {
   const { userAddress, activeCoins, coinSettings, stablecoinSymbol, forceRun = false } = params
 
@@ -84,331 +94,334 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   }
 
   const startTime = Date.now()
+  const log = makeLogger()
 
-  const walletBalances = await fetchWalletBalances(userAddress)
-  const heldCoins = activeCoins.filter((symbol) => walletBalances[symbol]?.isHeld)
-  const marketHoldReason = 'No volatile assets held. Monitoring is on hold until a balance appears.'
+  // ── Step 0: Get prices first ────────────────────────────────────────────────
+  const marketSnapshot = await fetchMarketSnapshot()
+  const { fearGreed } = marketSnapshot
 
-  if (heldCoins.length === 0) {
-    const ranAt = new Date()
-    const nextRunAt = calculateNextRunAt({
-      heldCoinCount: 0,
-      usedLocalAnalyser: false,
-      actionTaken: null,
+  // ── Balances (with USD threshold check) ──────────────────────────────────────
+  const walletBalances = await fetchWalletBalances(userAddress, marketSnapshot.prices)
+
+  // ── Sort coins by priority (most risky from last scan → first) ──────────────
+  const orderedCoins = sortByPriority(activeCoins)
+
+  // ── Step 1: Market data ──────────────────────────────────────────────────────
+
+  log.add('header', '═══ CryptoGuardian Agent Scan ═══')
+  log.add('system', `Network: ${IS_TESTNET ? 'Ethereum Sepolia (testnet)' : 'Ethereum Mainnet'}`)
+  log.add('system', `Fear & Greed Index: ${fearGreed.value}/100 (${fearGreed.label})`)
+  log.add('system', `Assets to scan: ${orderedCoins.length} — ordered by risk priority`)
+
+  const queueStr = orderedCoins
+    .map((s) => {
+      const score = coinPriorityScores[s] ?? 1
+      const tag = score === 4 ? ' [!DANGER]' : score === 3 ? ' [OPP]' : score === 2 ? ' [CAUTION]' : ''
+      return `${s}${tag}`
     })
+    .join(' → ')
+  log.add('info', `Priority queue: ${queueStr}`)
+  log.add('system', '─'.repeat(48))
 
-    lastRunAt = ranAt
-    nextAllowedRunAt = nextRunAt
-
-    return {
-      verdicts: Object.fromEntries(
-        activeCoins.map((symbol) => [symbol, 'NEUTRAL' as Verdict])
-      ) as Record<string, Verdict>,
-      priorityCoin: '',
-      actionTaken: null,
-      reasoning: marketHoldReason,
-      newsSnippets: {},
-      loopDurationMs: Date.now() - startTime,
-      nextRunAt,
-      ranAt,
-      stablecoinUsed: stablecoinSymbol,
-      veniceWarning: marketHoldReason,
+  // ── Step 2: News — fetched per-coin sequentially ────────────────────────────
+  const coinNames = Object.fromEntries(
+    activeCoins.map((s) => [s, MONITORED_COINS[s]?.name ?? s])
+  )
+  const newsSnippets: Record<string, string> = {}
+  for (const symbol of orderedCoins) {
+    log.add('info', `Fetching news & market context...`, symbol)
+    const batchResult = await import('./venice').then(m =>
+      m.fetchAllCoinNews([symbol], coinNames)
+    )
+    newsSnippets[symbol] = batchResult[symbol] ?? `No news for ${symbol}.`
+    const snippet = newsSnippets[symbol]
+    if (snippet && !snippet.startsWith('No ')) {
+      const preview = snippet.length > 100 ? snippet.slice(0, 100) + '…' : snippet
+      log.add('ai', `📰 ${preview}`, symbol)
     }
   }
 
-  // ── Step 1: Fetch market data ──────────────────────────────────────────────
-  const marketSnapshot = await fetchMarketSnapshot()
+  log.add('system', '─'.repeat(48))
+  log.add('info', 'Running AI analysis across all assets...')
 
-  // ── Step 2: Fetch news per coin ───────────────────────────────────────────
-  const coinNames = Object.fromEntries(
-    activeCoins.map((symbol) => [symbol, MONITORED_COINS[symbol]?.name ?? symbol])
-  )
-  const newsSnippets = await fetchAllCoinNews(heldCoins, coinNames)
-
-  // ── Step 3: Venice AI analysis (falls back to local analyser automatically) ──
+  // ── Step 3: AI Analysis (one batch call for all coins) ──────────────────────
   const analysis = await analyzeMarket({
     prices: marketSnapshot.prices,
-    fearGreed: marketSnapshot.fearGreed,
+    fearGreed,
     newsSnippets,
-    activeCoins: heldCoins,
+    activeCoins: orderedCoins,
     userSettings: coinSettings,
   })
 
-  // Detect if local analyser was used (rawResponse contains the marker)
   const usedLocalAnalyser = analysis.rawResponse.includes('local-analyser')
   const providerMatch = analysis.rawResponse.match(/\[provider:([^\]]+)\]/)
-  const providerUsed = providerMatch?.[1] ?? null
+  const providerUsed = providerMatch?.[1] ?? (usedLocalAnalyser ? 'Local Rule Engine' : 'Unknown')
 
   let veniceWarning: string | undefined
   if (usedLocalAnalyser) {
-    veniceWarning =
-      'All AI providers unavailable — verdicts calculated from price momentum and Fear & Greed index.'
+    veniceWarning = 'All AI providers unavailable — verdicts calculated from price momentum and Fear & Greed index.'
+    log.add('warning', `⚠ AI providers unavailable — using local price-momentum analysis`)
   } else if (providerUsed && providerUsed !== 'Venice AI') {
     veniceWarning = `Venice AI unavailable — analysis provided by ${providerUsed} (free tier).`
+    log.add('warning', `ℹ Venice AI unavailable — using ${providerUsed}`)
+  } else {
+    log.add('success', `✓ Venice AI analysis complete (${providerUsed})`)
   }
 
-  // ── Step 4: Check rules for priority coin ─────────────────────────────────
+  // ── Step 4: Per-coin result logging & priority update ───────────────────────
+  log.add('system', '─'.repeat(48))
+
+  const perCoinReasoning: Record<string, string> = {}
+  const newPriorities: Record<string, number> = {}
+
+  for (const symbol of orderedCoins) {
+    const verdict = analysis.verdicts[symbol] ?? 'NEUTRAL'
+    const price = marketSnapshot.prices[symbol]
+    const prevScore = coinPriorityScores[symbol] ?? 1
+    const newScore = verdictToPriority(verdict)
+    newPriorities[symbol] = newScore
+
+    const verdictIcon = verdict === 'DANGER' ? '🔴' : verdict === 'OPPORTUNITY' ? '🟢' : verdict === 'CAUTION' ? '🟡' : '⚪'
+    const verdictType: TerminalLineType =
+      verdict === 'DANGER' ? 'error' : verdict === 'OPPORTUNITY' ? 'success' : verdict === 'CAUTION' ? 'warning' : 'info'
+
+    if (price) {
+      const h1 = (price.usd_1h_change >= 0 ? '+' : '') + price.usd_1h_change.toFixed(2) + '%'
+      const h24 = (price.usd_24h_change >= 0 ? '+' : '') + price.usd_24h_change.toFixed(2) + '%'
+      log.add('info', `$${price.usd.toLocaleString('en-US', { maximumFractionDigits: 4 })} | 1h: ${h1} | 24h: ${h24}`, symbol)
+    }
+
+    // Escalation/de-escalation notice
+    if (newScore > prevScore && prevScore > 0) {
+      log.add('warning', `⬆ Risk escalated: ${scoreToLabel(prevScore)} → ${verdict}`, symbol)
+    } else if (newScore < prevScore && prevScore >= 4) {
+      log.add('success', `⬇ Risk de-escalated from DANGER → ${verdict}`, symbol)
+    }
+
+    log.add(verdictType, `${verdictIcon} VERDICT: ${verdict}`, symbol)
+
+    // Per-coin reasoning (use main reasoning for priority coin, auto-generate for others)
+    if (symbol === analysis.priorityCoin) {
+      perCoinReasoning[symbol] = analysis.reasoning
+    } else if (price) {
+      const h1 = price.usd_1h_change.toFixed(2)
+      const h24 = price.usd_24h_change.toFixed(2)
+      perCoinReasoning[symbol] = `${symbol} showing ${verdict.toLowerCase()} signal — ${h1}% in 1h, ${h24}% in 24h. F&G: ${fearGreed.value} (${fearGreed.label}). ${verdict === 'NEUTRAL' ? 'No action required.' : verdict === 'CAUTION' ? 'Monitor closely.' : verdict === 'DANGER' ? 'Capital protection recommended.' : 'Positive momentum noted.'}`
+    } else {
+      perCoinReasoning[symbol] = `${symbol} verdict: ${verdict}. Price data unavailable.`
+    }
+
+    // Extra monitoring note for high-priority coins
+    if (newScore >= 4) {
+      log.add('warning', `⚡ HIGH PRIORITY — will re-check in 30s`, symbol)
+    } else if (newScore <= 1 && prevScore <= 1) {
+      log.add('info', `→ Stable — lower monitoring frequency applied`, symbol)
+    }
+
+    log.add('system', '─'.repeat(48))
+
+    // Update persistent priority scores
+    coinPriorityScores[symbol] = newScore
+  }
+
+  // ── Step 5: Priority summary ─────────────────────────────────────────────────
+  const rankedStr = [...orderedCoins]
+    .sort((a, b) => (newPriorities[b] ?? 1) - (newPriorities[a] ?? 1))
+    .map((s) => `${s}(${newPriorities[s] ?? 1})`)
+    .join(' > ')
+  log.add('system', `Priority ranking: ${rankedStr}`)
+
+  // ── Step 6: Action selection (with position-based logic) ──────────────────────
   let prioritySymbol = analysis.priorityCoin
   let priorityVerdict = analysis.verdicts[prioritySymbol] ?? 'NEUTRAL'
   let priorityAction = analysis.priorityAction
   let reasoning = analysis.reasoning
 
-  // OVERRIDE: If any active coin is in DANGER, prioritize protecting it by forcing a SELL (swap)
-  const dangerCoin = heldCoins.find((symbol) => analysis.verdicts[symbol] === 'DANGER')
+  const dangerCoin = orderedCoins.find((s) => analysis.verdicts[s] === 'DANGER')
   if (dangerCoin) {
-    prioritySymbol = dangerCoin
-    priorityVerdict = 'DANGER'
-    priorityAction = 'SELL'
-    reasoning = `[CRITICAL PROTECTION] Forcing automated swap of ${dangerCoin} to stablecoin due to DANGER status. ${reasoning}`
-    console.warn(
-      `[agent-engine] Override: active coin ${dangerCoin} is in DANGER! Forcing SELL action for protection.`
+    prioritySymbol = dangerCoin; priorityVerdict = 'DANGER'; priorityAction = 'SELL'
+    
+    // Check position-based swap decision
+    const positionDecision = await shouldSwapBasedOnPosition(
+      userAddress,
+      dangerCoin,
+      'DANGER',
+      marketSnapshot.prices[dangerCoin]?.usd ?? 0
     )
+
+    reasoning = positionDecision.reason
+    priorityAction = positionDecision.should ? 'SELL' : 'HOLD'
+
+    if (positionDecision.should) {
+      log.add('error', `🚨 CRITICAL: ${dangerCoin} — ${reasoning}`)
+    } else {
+      log.add('warning', `⚠️ ALERT: ${dangerCoin} — ${reasoning}`)
+    }
   }
 
   const ruleCheck = checkUserRules({
-    symbol: prioritySymbol,
-    action: priorityAction,
-    verdict: priorityVerdict,
+    symbol: prioritySymbol, action: priorityAction, verdict: priorityVerdict,
     settings: coinSettings,
     price: marketSnapshot.prices[prioritySymbol]?.usd ?? 0,
     balanceUSD: (walletBalances[prioritySymbol]?.formatted ?? 0) * (marketSnapshot.prices[prioritySymbol]?.usd ?? 0),
   })
 
-  // ── Step 5: Execute swap if action is warranted ───────────────────────────
+  // ── Step 7: Execute swap if warranted ────────────────────────────────────────
   let actionTaken: AgentAction | null = null
 
   if (ruleCheck.allowed && priorityAction !== 'HOLD') {
     const balance = walletBalances[prioritySymbol]
+    const amtUSD = priorityAction === 'SELL'
+      ? (balance?.formatted ?? 0) * (marketSnapshot.prices[prioritySymbol]?.usd ?? 0)
+      : ruleCheck.swapAmountUSD
+    log.add('warning', `Executing ${priorityAction} $${amtUSD.toFixed(2)} of ${prioritySymbol} → ${stablecoinSymbol}...`)
+
     actionTaken = await executeSwap({
-      symbol: prioritySymbol,
-      action: priorityAction,
-      verdict: priorityVerdict,
-      amountUSD:
-        priorityAction === 'SELL'
-          ? (balance?.formatted ?? 0) * (marketSnapshot.prices[prioritySymbol]?.usd ?? 0)
-          : ruleCheck.swapAmountUSD,
-      userAddress,
+      symbol: prioritySymbol, action: priorityAction, verdict: priorityVerdict,
+      amountUSD: amtUSD, userAddress,
       price: marketSnapshot.prices[prioritySymbol]?.usd ?? 0,
-      reasoning: reasoning,
-      stablecoinSymbol,
+      reasoning, stablecoinSymbol,
       balance: balance ?? { symbol: prioritySymbol, rawBalance: BigInt(0), decimals: 18, formatted: 0, isHeld: false },
     })
-  } else {
-    // Log the skip
-    actionTaken = {
-      id: crypto.randomUUID(),
-      timestamp: new Date(),
-      coin: prioritySymbol,
-      verdict: priorityVerdict,
-      action: 'SKIPPED',
-      amountUSD: 0,
-      reasoning: ruleCheck.reason,
-      status: 'skipped',
+
+    if (actionTaken.status === 'confirmed') {
+      log.add('success', `✓ Swap confirmed${actionTaken.txHash ? ` — tx: ${actionTaken.txHash.slice(0, 20)}…` : ''}`)
+    } else if (actionTaken.status === 'failed') {
+      log.add('error', `✗ Swap failed — will retry in 5 minutes`)
+    } else {
+      log.add('info', `⏳ Swap pending — ${actionTaken.txHash ?? 'awaiting confirmation'}`)
     }
+  } else {
+    actionTaken = {
+      id: crypto.randomUUID(), timestamp: new Date(),
+      coin: prioritySymbol, verdict: priorityVerdict,
+      action: 'SKIPPED', amountUSD: 0,
+      reasoning: ruleCheck.reason, status: 'skipped',
+    }
+    log.add('info', `No swap executed — ${ruleCheck.reason}`)
   }
+
+  // ── Finalize ─────────────────────────────────────────────────────────────────
+  const worst = worstVerdict(analysis.verdicts, orderedCoins)
+  const durationMs = Date.now() - startTime
 
   lastRunAt = new Date()
   nextAllowedRunAt = calculateNextRunAt({
-    heldCoinCount: heldCoins.length,
-    usedLocalAnalyser: analysis.rawResponse.includes('local-analyser'),
+    usedLocalAnalyser,
     actionTaken,
+    worst,
   })
+
+  const nextMs = nextAllowedRunAt.getTime() - Date.now()
+  const nextSec = Math.round(nextMs / 1000)
+  log.add('system', `Next scan in ${nextSec}s (worst verdict: ${worst})`)
+  log.add('system', `Scan complete in ${(durationMs / 1000).toFixed(1)}s`)
 
   return {
     verdicts: analysis.verdicts,
     priorityCoin: prioritySymbol,
     actionTaken,
-    reasoning: reasoning,
+    reasoning,
     newsSnippets,
-    loopDurationMs: Date.now() - startTime,
+    loopDurationMs: durationMs,
     nextRunAt: nextAllowedRunAt,
     ranAt: lastRunAt,
     stablecoinUsed: stablecoinSymbol,
     veniceWarning,
+    terminalLogs: log.lines(),
+    perCoinReasoning,
+    coinPriorities: newPriorities,
   }
+}
+
+function scoreToLabel(score: number): string {
+  return score === 4 ? 'DANGER' : score === 3 ? 'OPPORTUNITY' : score === 2 ? 'CAUTION' : 'NEUTRAL'
 }
 
 // ─── User Rules Check ─────────────────────────────────────────────────────────
 
 type RuleCheckParams = {
-  symbol: string
-  action: 'BUY' | 'SELL' | 'HOLD'
-  verdict: Verdict
-  settings: CoinSettings
-  price: number
-  balanceUSD: number
+  symbol: string; action: 'BUY' | 'SELL' | 'HOLD'; verdict: Verdict
+  settings: CoinSettings; price: number; balanceUSD: number
 }
-
-type RuleCheckResult = {
-  allowed: boolean
-  reason: string
-  swapAmountUSD: number
-}
+type RuleCheckResult = { allowed: boolean; reason: string; swapAmountUSD: number }
 
 function checkUserRules(params: RuleCheckParams): RuleCheckResult {
   const { symbol, action, verdict, settings, price, balanceUSD } = params
-
   const isDangerSell = verdict === 'DANGER' && action === 'SELL'
   let setting = settings[symbol]
 
   if (!setting) {
     if (isDangerSell) {
-      // Create a temporary default setting for critical protection
-      setting = {
-        enabled: true,
-        maxSwapUSD: 300,
-        dailyLimitUSD: 600,
-        minHoldUSD: 100,
-        riskSensitivity: 'conservative',
-      }
+      setting = { enabled: true, maxSwapUSD: 300, dailyLimitUSD: 600, minHoldUSD: 100, riskSensitivity: 'conservative' }
     } else {
       return { allowed: false, reason: `No settings found for ${symbol}`, swapAmountUSD: 0 }
     }
   }
 
-  if (!setting.enabled && !isDangerSell) {
-    return { allowed: false, reason: `Monitoring is disabled for ${symbol}`, swapAmountUSD: 0 }
-  }
-
-  if (isDangerSell && balanceUSD <= 0) {
+  if (!setting.enabled && !isDangerSell)
+    return { allowed: false, reason: `Monitoring disabled for ${symbol}`, swapAmountUSD: 0 }
+  if (isDangerSell && balanceUSD <= 0)
     return { allowed: false, reason: `No balance available for ${symbol}`, swapAmountUSD: 0 }
-  }
-
-  // Conservative: only act on DANGER for sells
-  if (setting.riskSensitivity === 'conservative' && action === 'SELL' && verdict !== 'DANGER') {
-    return {
-      allowed: false,
-      reason: `Conservative mode: only acting on DANGER, current verdict is ${verdict}`,
-      swapAmountUSD: 0,
-    }
-  }
-
-  // Conservative: never buys
-  if (setting.riskSensitivity === 'conservative' && action === 'BUY') {
-    return {
-      allowed: false,
-      reason: 'Conservative mode: buy actions disabled',
-      swapAmountUSD: 0,
-    }
-  }
-
-  // Moderate: no buys unless aggressive
-  if (setting.riskSensitivity === 'moderate' && action === 'BUY') {
-    return {
-      allowed: false,
-      reason: 'Moderate mode: buy actions disabled. Set Aggressive to enable.',
-      swapAmountUSD: 0,
-    }
-  }
-
-  // Calculate swap amount based on risk sensitivity
-  // For danger sells, we want to protect the asset by swapping 100% of maxSwapUSD (swapPercentage = 1.0)
-  const swapPercentage = isDangerSell
-    ? 1.0
-    : setting.riskSensitivity === 'aggressive'
-      ? 0.75
-      : setting.riskSensitivity === 'moderate'
-        ? 0.5
-        : 0.25
-
-  const swapAmountUSD = Math.min(setting.maxSwapUSD, setting.maxSwapUSD * swapPercentage)
-  const dangerSellAmountUSD = balanceUSD
-
-  if (swapAmountUSD <= 0) {
-    return { allowed: false, reason: 'Swap amount is zero', swapAmountUSD: 0 }
-  }
-
-  if (price <= 0) {
+  if (setting.riskSensitivity === 'conservative' && action === 'SELL' && verdict !== 'DANGER')
+    return { allowed: false, reason: `Conservative mode: only acting on DANGER, current verdict is ${verdict}`, swapAmountUSD: 0 }
+  if (setting.riskSensitivity === 'conservative' && action === 'BUY')
+    return { allowed: false, reason: 'Conservative mode: buy actions disabled', swapAmountUSD: 0 }
+  if (setting.riskSensitivity === 'moderate' && action === 'BUY')
+    return { allowed: false, reason: 'Moderate mode: buy actions disabled. Set Aggressive to enable.', swapAmountUSD: 0 }
+  if (price <= 0)
     return { allowed: false, reason: `Price data unavailable for ${symbol}`, swapAmountUSD: 0 }
-  }
 
+  const swapPct = isDangerSell ? 1.0 : setting.riskSensitivity === 'aggressive' ? 0.75 : setting.riskSensitivity === 'moderate' ? 0.5 : 0.25
+  const swapAmountUSD = Math.min(setting.maxSwapUSD, setting.maxSwapUSD * swapPct)
+  if (swapAmountUSD <= 0)
+    return { allowed: false, reason: 'Swap amount is zero', swapAmountUSD: 0 }
+
+  const dangerSellAmt = balanceUSD
   return {
     allowed: true,
     reason: isDangerSell
-      ? `Action approved [CRITICAL PROTECTION]: ${action} $${dangerSellAmountUSD.toFixed(2)} of ${symbol} due to DANGER status`
+      ? `Action approved [CRITICAL PROTECTION]: ${action} $${dangerSellAmt.toFixed(2)} of ${symbol} due to DANGER status`
       : `Action approved: ${action} $${swapAmountUSD.toFixed(2)} of ${symbol}`,
-    swapAmountUSD: isDangerSell ? dangerSellAmountUSD : swapAmountUSD,
+    swapAmountUSD: isDangerSell ? dangerSellAmt : swapAmountUSD,
   }
 }
 
 // ─── Execute Swap ─────────────────────────────────────────────────────────────
 
 type ExecuteSwapParams = {
-  symbol: string
-  action: 'BUY' | 'SELL'
-  verdict: Verdict
-  amountUSD: number
-  userAddress: string
-  price: number
-  reasoning: string
-  stablecoinSymbol: string
-  balance: {
-    symbol: string
-    rawBalance: bigint
-    decimals: number
-    formatted: number
-    isHeld: boolean
-  }
+  symbol: string; action: 'BUY' | 'SELL'; verdict: Verdict; amountUSD: number
+  userAddress: string; price: number; reasoning: string; stablecoinSymbol: string
+  balance: { symbol: string; rawBalance: bigint; decimals: number; formatted: number; isHeld: boolean }
 }
 
 async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
   const { symbol, action, verdict, amountUSD, userAddress, price, reasoning, stablecoinSymbol, balance } = params
-
   const coin = getCoin(symbol)
 
   try {
-    const calldata =
-      action === 'SELL'
-        ? buildSellToStable({
-          tokenAddress: coin.baseAddress,
-          tokenDecimals: coin.decimals,
-          amountInUSD: amountUSD,
-          tokenPriceUSD: price,
-          recipient: userAddress,
-          stablecoinSymbol,
-          tokenBalanceRaw: balance.rawBalance,
-          isNative: symbol === 'ETH',
+    const calldata = action === 'SELL'
+      ? buildSellToStable({
+          tokenAddress: coin.baseAddress, tokenDecimals: coin.decimals,
+          amountInUSD: amountUSD, tokenPriceUSD: price,
+          recipient: userAddress, stablecoinSymbol,
+          tokenBalanceRaw: balance.rawBalance, isNative: symbol === 'ETH',
         })
-        : buildBuyWithStable({
-          tokenAddress: coin.baseAddress,
-          amountInUSD: amountUSD,
-          recipient: userAddress,
-          stablecoinSymbol,
-        })
+      : buildBuyWithStable({ tokenAddress: coin.baseAddress, amountInUSD: amountUSD, recipient: userAddress, stablecoinSymbol })
 
     const relay = await relayUniswapSwap({
-      to: calldata.to,
-      data: calldata.data,
-      value: calldata.value,
-      userAddress,
-      chainId: IS_TESTNET ? 11155111 : 1,
+      to: calldata.to, data: calldata.data, value: calldata.value,
+      userAddress, chainId: IS_TESTNET ? 11155111 : 1,
     })
 
     return {
-      id: crypto.randomUUID(),
-      timestamp: new Date(),
-      coin: symbol,
-      verdict,
-      action,
-      amountUSD,
-      reasoning,
-      txHash: relay.txHash,
-      relayId: relay.relayId,
+      id: crypto.randomUUID(), timestamp: new Date(),
+      coin: symbol, verdict, action, amountUSD, reasoning,
+      txHash: relay.txHash, relayId: relay.relayId,
       status: relay.status === 'confirmed' ? 'confirmed' : 'pending',
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`Swap execution failed for ${symbol}:`, message)
-
-    return {
-      id: crypto.randomUUID(),
-      timestamp: new Date(),
-      coin: symbol,
-      verdict,
-      action,
-      amountUSD,
-      reasoning,
-      status: 'failed',
-    }
+    console.error(`Swap execution failed for ${symbol}:`, err instanceof Error ? err.message : String(err))
+    return { id: crypto.randomUUID(), timestamp: new Date(), coin: symbol, verdict, action, amountUSD, reasoning, status: 'failed' }
   }
 }

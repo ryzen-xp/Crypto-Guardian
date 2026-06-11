@@ -20,7 +20,7 @@ import {
   Info,
 } from 'lucide-react'
 import Header from '@/components/layout/Header'
-import ConnectWalletButton from '@/components/wallet/ConnectWalletButton'
+import ConnectKitButtonWrapper from '@/components/wallet/ConnectKitButtonWrapper'
 import { MONITORED_COINS, STABLECOINS } from '@/lib/coins'
 import { CHAIN_CONFIG, ACTIVE_CHAIN } from '@/lib/chain-config'
 import { useCoinStore } from '@/store/coinStore'
@@ -69,6 +69,15 @@ export default function SetupPage() {
 
   const stablecoins = Object.values(STABLECOINS)
   const isOnCorrectChain = chain?.id === ACTIVE_CHAIN.id
+
+  // Check wallet connection and redirect to dashboard if already connected
+  // This must be called after all other hooks
+  useEffect(() => {
+    if (isConnected && isOnCorrectChain) {
+      // Wallet is already connected and on correct chain — go straight to dashboard
+      router.push('/dashboard')
+    }
+  }, [isConnected, isOnCorrectChain, router])
 
   // Auto-select coins when balances load — only held coins
   useEffect(() => {
@@ -185,7 +194,7 @@ Agent Validity: 30 Days (ERC-7715 & 1Shot API Relay)`
             {!isConnected ? (
               <div className="space-y-4">
                 <div className="flex justify-center">
-                  <ConnectWalletButton label="Connect Wallet" />
+                  <ConnectKitButtonWrapper />
                 </div>
                 <p className="text-center text-xs text-gray-500">
                   Don&apos;t have a wallet?{' '}

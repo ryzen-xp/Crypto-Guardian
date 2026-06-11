@@ -12,12 +12,15 @@ import {
 } from 'lucide-react'
 import { MONITORED_COINS, STABLECOINS } from '@/lib/coins'
 import LiveMockup from '@/components/layout/LiveMockup'
+import LandingPageClient from '@/components/layout/LandingPageClient'
+import ConnectKitButtonWrapper from '@/components/wallet/ConnectKitButtonWrapper'
 
 export default function LandingPage() {
   const stablecoins = Object.values(STABLECOINS)
 
   return (
-    <div className="min-h-screen bg-gray-950">
+    <LandingPageClient>
+      <div className="min-h-screen bg-gray-950">
       {/* Nav */}
       <header className="border-b border-white/5 bg-gray-950/80 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 lg:px-6">
@@ -34,12 +37,7 @@ export default function LandingPage() {
             >
               Dashboard
             </Link>
-            <Link
-              href="/setup"
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold transition hover:bg-blue-500"
-            >
-              Get Started
-            </Link>
+            <ConnectKitButtonWrapper />
           </div>
         </div>
       </header>
@@ -70,12 +68,7 @@ export default function LandingPage() {
           </p>
 
           <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Link
-              href="/setup"
-              className="flex items-center gap-2 rounded-xl bg-blue-600 px-8 py-3.5 text-base font-semibold shadow-lg shadow-blue-600/25 transition hover:bg-blue-500"
-            >
-              Connect Wallet <ArrowRight className="h-4 w-4" />
-            </Link>
+            <ConnectKitButtonWrapper />
             <Link
               href="/dashboard"
               className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-8 py-3.5 text-base font-semibold transition hover:bg-white/10"
@@ -251,12 +244,7 @@ export default function LandingPage() {
             Connect MetaMask, select your coins, set your limits. Takes under 2 minutes.
           </p>
           <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Link
-              href="/setup"
-              className="flex items-center gap-2 rounded-xl bg-blue-600 px-8 py-3.5 text-base font-semibold shadow-lg shadow-blue-600/25 transition hover:bg-blue-500"
-            >
-              Connect Wallet <ArrowRight className="h-4 w-4" />
-            </Link>
+            <ConnectKitButtonWrapper />
             <Link
               href="/dashboard"
               className="rounded-xl border border-white/10 px-8 py-3.5 text-base font-semibold transition hover:bg-white/5"
@@ -302,5 +290,6 @@ export default function LandingPage() {
         </a>
       </footer>
     </div>
+    </LandingPageClient>
   )
 }

@@ -21,13 +21,13 @@ type ConnectWalletButtonProps = {
   className?: string
 }
 
-const CONNECTOR_PRIORITY = ['metaMask', 'coinbaseWallet', 'walletConnect', 'injected']
+const CONNECTOR_PRIORITY = ['metaMask', 'walletConnect', 'safe', 'injected']
 
 // Connector icon + description mapping
 const CONNECTOR_META: Record<string, { icon: string; desc: string }> = {
   metaMask: { icon: '🦊', desc: 'The most popular Ethereum browser wallet' },
-  coinbaseWallet: { icon: '🔵', desc: 'Connect with Coinbase Wallet' },
   walletConnect: { icon: '🔗', desc: 'Scan with any mobile wallet app' },
+  safe: { icon: '🔐', desc: 'Connect with Safe (multisig wallets)' },
   injected: { icon: '💉', desc: 'Use your browser-detected wallet' },
 }
 

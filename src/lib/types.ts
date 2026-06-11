@@ -61,6 +61,36 @@ export type CoinSetting = {
 
 export type CoinSettings = Record<string, CoinSetting>
 
+// ─── Position Tracking (NEW) ──────────────────────────────────────────────────
+
+/**
+ * Cost basis position: User's entry point, stop-loss, and quantity held.
+ * Agent uses this to decide if a DANGER verdict should trigger a swap.
+ */
+export type Position = {
+  id?: string
+  userId: string
+  coinSymbol: string           // "ETH", "WETH"
+  entryPrice: number           // Price user bought at (USD)
+  quantity: number             // Amount held
+  boughtAt: Date               // When position was opened
+  protectBelow: number         // Stop-loss price (USD)
+  source: 'manual' | 'import'  // Where entry price came from
+  notes?: string               // User's notes (why they bought)
+}
+
+/**
+ * Position with calculated P&L metrics.
+ */
+export type PositionWithPnL = Position & {
+  currentPrice: number
+  totalValueUSD: number        // quantity × currentPrice
+  totalCostUSD: number         // quantity × entryPrice
+  pnlUSD: number               // totalValueUSD - totalCostUSD
+  pnlPercent: number           // (pnlUSD / totalCostUSD) × 100
+  isUnderStopLoss: boolean     // currentPrice <= protectBelow
+}
+
 // ─── Agent ───────────────────────────────────────────────────────────────────
 
 export type AgentActionType = 'BUY' | 'SELL' | 'HOLD' | 'SKIPPED'
@@ -78,6 +108,19 @@ export type AgentAction = {
   txHash?: string
   relayId?: string
   status: AgentActionStatus
+  positionId?: string          // If swap was triggered by position stop-loss
+}
+
+// ─── Terminal Logs ───────────────────────────────────────────────────────────
+
+export type TerminalLineType = 'system' | 'info' | 'ai' | 'success' | 'warning' | 'error' | 'header'
+
+export type TerminalLine = {
+  id: string
+  ts: string       // ISO timestamp string (serializable)
+  type: TerminalLineType
+  coin?: string    // If this log belongs to a specific coin analysis
+  content: string
 }
 
 export type AgentLoopResult = {
@@ -90,14 +133,45 @@ export type AgentLoopResult = {
   nextRunAt: Date
   ranAt: Date
   stablecoinUsed: string
-  /** Set when Venice was unavailable and local analysis was used instead */
   veniceWarning?: string
+  terminalLogs: TerminalLine[]
+  perCoinReasoning: Record<string, string>
+  coinPriorities: Record<string, number>
 }
 
-// ─── Venice AI ───────────────────────────────────────────────────────────────
+// ─── 1-Shot Relay ────────────────────────────────────────────────────────────
+
+export type RelayResult = {
+  relayId: string
+  status: 'pending' | 'confirmed' | 'failed'
+  txHash?: string
+  estimatedGasUSDC: string
+}
+
+// ─── Smart Accounts (ERC-7715) ───────────────────────────────────────────────
+
+export type PermissionGrant = {
+  delegatee: string           // Relayer address (1-Shot)
+  chainId: number
+  expiresAt: number          // Unix timestamp
+  permissions: Array<{
+    target: string           // Token address
+    valueLimit: string       // Max value (0 = unlimited)
+  }>
+}
+
+export type PermissionStatus = {
+  active: boolean
+  expiresAt?: Date
+  daysLeft?: number
+  coinsPermitted: string[]
+  needsRenewal: boolean
+}
+
+// ─── Venice AI Analysis ──────────────────────────────────────────────────────
 
 export type AnalysisResult = {
-  verdicts: VerdictMap
+  verdicts: Record<string, Verdict>
   priorityCoin: string
   priorityAction: 'BUY' | 'SELL' | 'HOLD'
   reasoning: string
@@ -112,47 +186,3 @@ export type MarketContext = {
   activeCoins: string[]
   userSettings: CoinSettings
 }
-
-// ─── Smart Accounts / Permissions ────────────────────────────────────────────
-
-export type PermissionStatus = {
-  active: boolean
-  expiresAt?: Date
-  daysLeft?: number
-  coinsPermitted: string[]
-  needsRenewal: boolean
-}
-
-export type PermissionGrant = {
-  grantId: string
-  smartAccountAddress: string
-  expiresAt: Date
-  coinsPermitted: string[]
-  txHash: string
-}
-
-// ─── 1Shot Relay ─────────────────────────────────────────────────────────────
-
-export type RelayStatus = 'pending' | 'confirmed' | 'failed'
-
-export type RelayResult = {
-  relayId: string
-  status: RelayStatus
-  txHash?: string
-  estimatedGasUSDC: string
-}
-
-// ─── API Responses ────────────────────────────────────────────────────────────
-
-export type ApiSuccess<T> = {
-  success: true
-  data: T
-}
-
-export type ApiError = {
-  success: false
-  error: string
-  code: string
-}
-
-export type ApiResponse<T> = ApiSuccess<T> | ApiError

@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { CHAIN_CONFIG, ACTIVE_CHAIN, IS_TESTNET } from '@/lib/chain-config'
 import { useWalletBalances } from '@/hooks/useWalletBalances'
 import type { AgentLoopResult, VerdictMap } from '@/lib/types'
+import { MONITORED_COINS } from '@/lib/coins'
 
 type PriceEntry = { usd: number; usd_1h_change: number; usd_24h_change: number }
 
@@ -50,6 +51,9 @@ export default function DashboardClient() {
     addProtectedValue,
     setError,
     error,
+    addTerminalLines,
+    setPerCoinReasoning,
+    setCoinPriorities,
   } = useAgentStore()
 
   const { isPaused, togglePause, coinSettings, selectedStablecoin } = useCoinStore()
@@ -89,19 +93,7 @@ export default function DashboardClient() {
       setStatus('running')
       setError(null)
 
-      const activeCoins = heldCoins
-
-      if (activeCoins.length === 0) {
-        setStatus('idle')
-        setVerdicts({})
-        setPriorityCoin(null)
-        setReasoning('No volatile assets held. Monitoring is on hold until a balance appears.')
-        setNextRunAt(null)
-        setNewsSnippets({})
-        setError(null)
-        scanRef.current = false
-        return
-      }
+      const activeCoins = Object.keys(MONITORED_COINS)
 
       try {
         const res = await fetch('/api/agent', {
@@ -132,6 +124,11 @@ export default function DashboardClient() {
           setNextRunAt(new Date(d.nextRunAt))
           setStatus('active')
           setError(null)
+
+          // Push terminal logs + per-coin data from this scan
+          if (d.terminalLogs?.length) addTerminalLines(d.terminalLogs)
+          if (d.perCoinReasoning)     setPerCoinReasoning(d.perCoinReasoning)
+          if (d.coinPriorities)       setCoinPriorities(d.coinPriorities)
 
           if (d.actionTaken) {
             addAction({
@@ -172,64 +169,20 @@ export default function DashboardClient() {
       setNextRunAt,
       addAction,
       addProtectedValue,
+      addTerminalLines,
+      setPerCoinReasoning,
+      setCoinPriorities,
       fetchPrices,
       refetchBalances,
     ]
   )
 
-  const autoStartHandled = useRef(false)
+  // Auto-start scanning when wallet is connected and agent is idle
   useEffect(() => {
-    const shouldAutoStart = searchParams.get('autoStart') === '1'
-    if (
-      !shouldAutoStart ||
-      autoStartHandled.current ||
-      !address ||
-      !isConnected ||
-      balancesLoading ||
-      isPaused ||
-      heldCoins.length === 0
-    ) {
-      return
+    if (isConnected && address && !balancesLoading && !isPaused && status === 'idle' && !scanRef.current) {
+      void runAgentScan(false)
     }
-
-    autoStartHandled.current = true
-    router.replace('/dashboard')
-    void runAgentScan(true)
-  }, [
-    address,
-    balancesLoading,
-    heldCoins.length,
-    isConnected,
-    isPaused,
-    router,
-    runAgentScan,
-    searchParams,
-  ])
-
-  useEffect(() => {
-    if (!isConnected || balancesLoading) return
-
-    if (heldCoins.length === 0) {
-      setStatus('idle')
-      setNextRunAt(null)
-      setVerdicts({})
-      setPriorityCoin(null)
-      setReasoning('No volatile assets held. Monitoring is on hold until a balance appears.')
-      setNewsSnippets({})
-      setError(null)
-    }
-  }, [
-    balancesLoading,
-    heldCoins.length,
-    isConnected,
-    setError,
-    setNextRunAt,
-    setNewsSnippets,
-    setPriorityCoin,
-    setReasoning,
-    setVerdicts,
-    setStatus,
-  ])
+  }, [isConnected, address, balancesLoading, isPaused, status, runAgentScan])
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -319,17 +272,13 @@ export default function DashboardClient() {
               Safe asset: <span className="font-semibold text-gray-300">{selectedStablecoin}</span>
             </span>
 
-            {isConnected && !balancesLoading && heldCoins.length > 0 && (
+            {isConnected && !balancesLoading && (
               <span className="text-xs text-gray-500">
-                Detected:{' '}
-                <span className="font-semibold text-green-400">{heldCoins.join(', ')}</span>
+                Wallet Assets:{' '}
+                <span className="font-semibold text-green-400">
+                  {heldCoins.length > 0 ? heldCoins.join(', ') : 'None'}
+                </span>
               </span>
-            )}
-            {isConnected && !balancesLoading && heldCoins.length === 0 && !IS_TESTNET && (
-              <span className="text-xs text-yellow-500">No monitored assets detected</span>
-            )}
-            {isConnected && !balancesLoading && heldCoins.length === 0 && IS_TESTNET && (
-              <span className="text-xs text-blue-400">No volatile assets held - monitoring on hold</span>
             )}
           </div>
 
@@ -344,7 +293,7 @@ export default function DashboardClient() {
             </button>
             <button
               onClick={() => runAgentScan(true)}
-              disabled={!isConnected || status === 'running' || isPaused || heldCoins.length === 0}
+              disabled={!isConnected || status === 'running' || isPaused}
               className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <RefreshCw className={cn('h-3 w-3', status === 'running' && 'animate-spin')} />
@@ -408,6 +357,7 @@ export default function DashboardClient() {
             totalSwaps={totalSwapsExecuted}
             nextRunAt={nextRunAt}
             fearGreed={fearGreed}
+            nextScanAsset={priorityCoin}
           />
         </div>
 
@@ -438,9 +388,7 @@ export default function DashboardClient() {
                 <Brain className="h-8 w-8 text-gray-600" />
                 <p className="text-sm text-gray-500">
                   {isConnected
-                    ? heldCoins.length > 0
-                      ? 'Click "Run Scan Now" to get your first AI analysis'
-                      : 'No volatile assets held. Monitoring is on hold.'
+                    ? 'Wait for the auto-scan or click "Run Scan Now" to start'
                     : 'Connect your wallet to start monitoring'}
                 </p>
               </div>
@@ -448,21 +396,7 @@ export default function DashboardClient() {
           </div>
         </div>
 
-        {Object.keys(newsSnippets).length > 0 && (
-          <div className="mb-6 rounded-xl border border-gray-800 bg-gray-900 p-5">
-            <h3 className="mb-4 text-sm font-semibold">Latest News (from Venice AI)</h3>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {Object.entries(newsSnippets)
-                .slice(0, 6)
-                .map(([symbol, snippet]) => (
-                  <div key={symbol} className="rounded-lg border border-gray-800 bg-gray-950 p-3">
-                    <span className="mb-1 block text-xs font-bold text-gray-400">{symbol}</span>
-                    <p className="line-clamp-2 text-xs text-gray-500">{snippet}</p>
-                  </div>
-                ))}
-            </div>
-          </div>
-        )}
+
 
         <AgentFeed actions={actionFeed.slice(0, 10)} />
       </main>

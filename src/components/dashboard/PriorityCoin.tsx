@@ -80,13 +80,18 @@ export default function PriorityCoin({
         </div>
       )}
 
-      {/* Venice AI reasoning */}
-      <div className="mb-4 rounded-lg border border-purple-500/20 bg-purple-500/5 p-3">
-        <div className="mb-1 flex items-center gap-1.5">
+      {/* Terminal link — AI reasoning moved to /terminal */}
+      <div className="mb-4 flex items-center justify-between rounded-lg border border-purple-500/20 bg-purple-500/5 px-3 py-2.5">
+        <div className="flex items-center gap-1.5">
           <Brain className="h-3 w-3 text-purple-400" />
-          <span className="text-xs font-medium text-purple-400">Venice AI</span>
+          <span className="text-xs font-medium text-purple-400">AI analysis ready</span>
         </div>
-        <p className="text-sm leading-relaxed text-gray-300">{reasoning}</p>
+        <a
+          href="/terminal"
+          className="flex items-center gap-1 rounded border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-[11px] font-semibold text-purple-300 transition-colors hover:bg-purple-500/20"
+        >
+          View Terminal →
+        </a>
       </div>
 
       {/* Last action */}

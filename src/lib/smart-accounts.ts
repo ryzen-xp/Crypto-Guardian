@@ -59,9 +59,8 @@ export function savePermissionGrant(address: string, grant: PermissionGrant): vo
   localStorage.setItem(
     `cg_permissions_${address.toLowerCase()}`,
     JSON.stringify({
-      expiresAt: grant.expiresAt.toISOString(),
-      coinsPermitted: grant.coinsPermitted,
-      grantId: grant.grantId,
+      expiresAt: new Date(grant.expiresAt * 1000).toISOString(),
+      coinsPermitted: [],
     })
   )
 }

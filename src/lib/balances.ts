@@ -30,19 +30,17 @@ const ERC20_ABI = [
 
 // Dust thresholds — below this we consider the wallet as NOT holding the asset
 // Testnet thresholds are very low — faucet drips are tiny
+// Minimum monitoring: $0.005 USD equivalent per asset
 const DUST_THRESHOLDS: Record<string, number> = IS_TESTNET
   ? {
-      ETH: 0.0001,   // any Sepolia faucet drip (0.05–0.5 ETH) qualifies
-      WBTC: 0.000001, // Aave testnet WBTC (8 decimals) — very small amounts count
-      LINK: 0.01,    // Chainlink faucet gives 10–20 LINK per request
-      UNI: 0.01,     // Uniswap faucet / transfers
+      WETH: 0.000001,  // extremely low for testnet (all amounts count until $0.005 USD check)
     }
   : {
-      ETH: 0.001,
-      WBTC: 0.00001,
-      LINK: 1.0,
-      UNI: 1.0,
+      WETH: 0.001,
     }
+
+// Minimum USD value to monitor an asset (defaults to $0.005)
+export const MINIMUM_MONITOR_USD = 0.005
 
 export type WalletBalance = {
   symbol: string
@@ -57,8 +55,15 @@ export type WalletBalances = Record<string, WalletBalance>
 /**
  * Fetch on-chain balances for all monitored coins for a given wallet address.
  * Called from the API route — server-side only.
+ * 
+ * A coin is considered "held" if:
+ *   1. Balance is above dust threshold (tokenomics check)
+ *   2. Balance is worth at least $0.005 USD (monitoring threshold)
  */
-export async function fetchWalletBalances(walletAddress: string): Promise<WalletBalances> {
+export async function fetchWalletBalances(
+  walletAddress: string,
+  priceMap?: Record<string, number | { usd: number }>
+): Promise<WalletBalances> {
   const chain = IS_TESTNET ? sepolia : mainnet
   const rpcUrl =
     process.env.NEXT_PUBLIC_RPC_URL ??
@@ -94,7 +99,11 @@ export async function fetchWalletBalances(walletAddress: string): Promise<Wallet
 
         const formatted = parseFloat(formatUnits(rawBalance, coin.decimals))
         const dustThreshold = DUST_THRESHOLDS[coin.symbol] ?? 0.001
-        const isHeld = formatted > dustThreshold
+        const priceData = priceMap?.[coin.symbol]
+        const coinPrice = typeof priceData === 'number' ? priceData : (priceData as any)?.usd ?? 0
+        const balanceUSD = formatted * coinPrice
+        // Held if: above dust threshold AND worth at least $0.005
+        const isHeld = formatted > dustThreshold && balanceUSD >= MINIMUM_MONITOR_USD
 
         results[coin.symbol] = {
           symbol: coin.symbol,
