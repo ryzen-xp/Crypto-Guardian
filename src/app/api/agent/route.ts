@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { runAgentLoop } from '@/lib/agent-engine'
 import { DEFAULT_STABLECOIN, STABLECOINS } from '@/lib/coins'
 import type { CoinSettings } from '@/lib/types'
+import type { Delegation7710 } from '@/lib/oneshot'
 
 type RequestBody = {
   userAddress: string
@@ -9,7 +10,7 @@ type RequestBody = {
   coinSettings: CoinSettings
   stablecoinSymbol?: string
   forceRun?: boolean
-  hasPermission?: boolean
+  delegations?: Delegation7710[] | null
 }
 
 // Rate limiting — prevent more than 1 manual call per minute per address
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
       coinSettings,
       stablecoinSymbol = DEFAULT_STABLECOIN,
       forceRun = false,
-      hasPermission = false,
+      delegations = null,
     } = body
 
     if (!userAddress || !activeCoins?.length) {
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest) {
       coinSettings,
       stablecoinSymbol,
       forceRun,
-      hasPermission,
+      delegations,
     })
 
     return NextResponse.json({ success: true, data: result })

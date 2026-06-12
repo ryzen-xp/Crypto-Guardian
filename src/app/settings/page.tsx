@@ -41,73 +41,54 @@ export default function SettingsPage() {
     }
   }, [address])
 
-  // Grant delegation permission - request MetaMask signature
+  // Grant delegation permission - use ERC-7715 to get real delegations
   const handleGrantPermission = async () => {
     if (!address) return
 
     setIsGranting(true)
     try {
-      if (!window.ethereum) {
-        throw new Error('No wallet provider found - please connect MetaMask or another wallet')
+      const { createWalletPermissionsClient, budgetWithHeadroom } = await import('@/lib/erc7715-permissions')
+      const client = createWalletPermissionsClient()
+
+      // Verify MetaMask support
+      const { hasProvider, supported } = await client.detect()
+      if (!hasProvider) {
+        throw new Error('MetaMask not installed')
+      }
+      if (!supported) {
+        throw new Error('Your MetaMask version does not support ERC-7715 advanced permissions')
       }
 
-      console.warn(`[Permission] Requesting signature from wallet for ${address}`)
+      console.warn(`[Permission] Requesting ERC-7715 permission from MetaMask...`)
 
-      // Create a message for user to sign
-      const timestamp = new Date().toISOString()
-      const message = `I grant permission to CryptoGuardian to execute swaps via 1-Shot relayer.
-
-Wallet: ${address}
-Chain: Sepolia (11155111)
-Timestamp: ${timestamp}
-
-This signature proves you authorized this permission.`
-
-      // Request user to sign the message with their wallet
-      const signature = await window.ethereum.request({
-        method: 'personal_sign',
-        params: [message, address],
-      } as any)
-
-      if (!signature) {
-        throw new Error('User rejected signing - permission not granted')
-      }
-
-      console.warn(`[Permission] User signed with wallet: ${signature.slice(0, 20)}...`)
-
-      // Send permission grant request to backend with signature
-      const response = await fetch('/api/grant-permission', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userAddress: address,
-          chainId: 11155111, // Sepolia
-          signature, // Proof of wallet signature
-          message,
-        }),
+      // Request permission with realistic budget (1000 USDC for swaps + fees)
+      const { delegations, expiry } = await client.grantPermission({
+        budgetUsdc: budgetWithHeadroom('1000'),
+        targetAddress: '0x02c9979a75fbdbc3a77485024ab8b6474308591e', // 1-Shot relayer
+        usdcAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', // Sepolia USDC
+        justification: 'Crypto-Guardian automated swap execution',
       })
 
-      const result = (await response.json()) as { ok: boolean; error?: string; permissionId?: string }
-
-      if (!response.ok || !result.ok) {
-        throw new Error(result.error || 'Failed to grant permission')
+      if (!delegations.length) {
+        throw new Error('No delegations returned from MetaMask')
       }
 
-      // Store permission locally with signature proof
+      console.warn(`[Permission] ERC-7715 permission granted! ${delegations.length} delegation(s)`)
+
+      // Store delegations locally (encrypted would be ideal, but localStorage for MVP)
       localStorage.setItem(
         `delegated_${address}`,
         JSON.stringify({
           grantedAt: new Date().toISOString(),
-          delegateTo: '0x02c9979a75fbdbc3a77485024ab8b6474308591e', // 1-Shot relayer
+          delegations, // Real cryptographic signatures
+          expiry,
           authorizedAccount: address,
-          signature, // Proof wallet signed
-          permissionId: result.permissionId,
           version: '1.0',
         })
       )
 
       setHasPermission(true)
-      console.warn(`[Permission] Permission granted and verified with wallet signature`)
+      console.warn(`[Permission] Delegations stored in localStorage`)
     } catch (err) {
       console.error('Failed to grant permission:', err)
       const errorMsg = err instanceof Error ? err.message : String(err)

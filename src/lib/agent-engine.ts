@@ -5,6 +5,7 @@ import { fetchMarketSnapshot } from './market-data'
 import { fetchAllCoinNews, analyzeMarket } from './venice'
 import { buildSellToStable, buildBuyWithStable } from './uniswap'
 import { relayUniswapSwap } from './oneshot'
+import type { Delegation7710 } from './oneshot'
 import { IS_TESTNET } from './chain-config'
 import { shouldSwapBasedOnPosition, getUserPositions, calculatePositionPnL } from './positions'
 import type { AgentAction, AgentLoopResult, CoinSettings, TerminalLine, TerminalLineType, Verdict } from './types'
@@ -85,11 +86,11 @@ type AgentLoopParams = {
   coinSettings: CoinSettings
   stablecoinSymbol: string
   forceRun?: boolean
-  hasPermission?: boolean
+  delegations?: Delegation7710[] | null
 }
 
 export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopResult> {
-  const { userAddress, activeCoins, coinSettings, stablecoinSymbol, forceRun = false, hasPermission = false } = params
+  const { userAddress, activeCoins, coinSettings, stablecoinSymbol, forceRun = false, delegations = null } = params
 
   if (!forceRun && isOnCooldown()) {
     throw new Error(`Agent is on cooldown. Next run at: ${getNextRunAt().toISOString()}`)
@@ -284,7 +285,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
       price: marketSnapshot.prices[prioritySymbol]?.usd ?? 0,
       reasoning, stablecoinSymbol,
       balance: balance ?? { symbol: prioritySymbol, rawBalance: BigInt(0), decimals: 18, formatted: 0, isHeld: false },
-      hasPermission,
+      delegations,
     })
 
     if (actionTaken.status === 'confirmed') {
@@ -396,17 +397,17 @@ type ExecuteSwapParams = {
   symbol: string; action: 'BUY' | 'SELL'; verdict: Verdict; amountUSD: number
   userAddress: string; price: number; reasoning: string; stablecoinSymbol: string
   balance: { symbol: string; rawBalance: bigint; decimals: number; formatted: number; isHeld: boolean }
-  hasPermission?: boolean
+  delegations?: Delegation7710[] | null
 }
 
 async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
-  const { symbol, action, verdict, amountUSD, userAddress, price, reasoning, stablecoinSymbol, balance, hasPermission = false } = params
+  const { symbol, action, verdict, amountUSD, userAddress, price, reasoning, stablecoinSymbol, balance, delegations = null } = params
   const coin = getCoin(symbol)
 
   try {
-    // Check if user has granted permission
-    if (!hasPermission) {
-      console.error(`[Agent] No permission granted for ${userAddress} - swap blocked`)
+    // Check if user has granted permission (delegations present)
+    if (!delegations || delegations.length === 0) {
+      console.error(`[Agent] No delegations provided for ${userAddress} - swap blocked`)
       return {
         id: crypto.randomUUID(),
         timestamp: new Date(),
@@ -428,9 +429,13 @@ async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
         })
       : buildBuyWithStable({ tokenAddress: coin.baseAddress, amountInUSD: amountUSD, recipient: userAddress, stablecoinSymbol })
 
+    // Use the first (should be only) delegation
+    const signedDelegation = delegations[0]
+
     const relay = await relayUniswapSwap({
       to: calldata.to, data: calldata.data, value: calldata.value,
       userAddress, chainId: IS_TESTNET ? 11155111 : 1,
+      signedDelegation,
     })
 
     // If swap is confirmed/pending, update position

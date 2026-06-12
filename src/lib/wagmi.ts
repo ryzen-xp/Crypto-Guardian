@@ -17,7 +17,7 @@ export const wagmiConfig = createConfig(
     chains: [sepolia, mainnet],
     transports: {
       [sepolia.id]: http(
-        process.env.NEXT_PUBLIC_RPC_URL ?? 'https://ethereum-sepolia-rpc.publicnode.com'
+        process.env.NEXT_PUBLIC_RPC_URL || 'https://1rpc.io/sepolia'
       ),
       [mainnet.id]: http(),
     },

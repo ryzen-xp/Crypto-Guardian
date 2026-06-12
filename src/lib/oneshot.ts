@@ -225,27 +225,13 @@ export async function relayTransaction(params: RelayParams & { signedDelegation?
     let delegation: Delegation7710
 
     if (signedDelegation) {
-      // Use the pre-signed delegation from frontend
+      // Use pre-signed delegation from frontend
       console.warn(`[1Shot] Using pre-signed delegation from frontend`)
       delegation = signedDelegation
     } else {
-      // Create unsigned delegation for testnet
-      // Generate a valid-looking mock signature (65 bytes = 0x + 128 hex chars)
-      // Format: 0x + 32 bytes (r) + 32 bytes (s) + 1 byte (v)
-      const mockR = 'a'.repeat(64) // 32 bytes in hex
-      const mockS = 'b'.repeat(64) // 32 bytes in hex
-      const mockV = '1b' // v value (27 or 28)
-      const mockSignature = '0x' + mockR + mockS + mockV
-
-      console.warn(`[1Shot] Creating mock-signed delegation for testnet`)
-      delegation = {
-        delegate: targetAddress,
-        delegator: userAddress,
-        authority: '0x0000000000000000000000000000000000000000000000000000000000000000',
-        caveats: [],
-        salt: '0x' + crypto.randomBytes(32).toString('hex'),
-        signature: mockSignature, // Valid 65-byte signature format
-      }
+      throw new Error(
+        'No pre-signed delegation provided. Please grant permission from Settings to enable swaps.'
+      )
     }
 
     // Verify delegation structure

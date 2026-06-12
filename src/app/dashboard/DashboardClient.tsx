@@ -94,9 +94,19 @@ export default function DashboardClient() {
 
       const activeCoins = Object.keys(MONITORED_COINS)
 
-      // Check if user has granted permission
+      // Retrieve delegations from localStorage (ERC-7715 permissions)
       const permissionKey = `delegated_${address}`
-      const hasPermission = !!localStorage.getItem(permissionKey)
+      const permissionData = localStorage.getItem(permissionKey)
+      let delegations = null
+      
+      if (permissionData) {
+        try {
+          const parsed = JSON.parse(permissionData)
+          delegations = parsed.delegations ?? null
+        } catch {
+          console.warn('Failed to parse delegations from localStorage')
+        }
+      }
 
       try {
         const res = await fetch('/api/agent', {
@@ -108,7 +118,7 @@ export default function DashboardClient() {
             coinSettings,
             stablecoinSymbol: selectedStablecoin,
             forceRun: force,
-            hasPermission,
+            delegations, // Pass real delegations from ERC-7715
           }),
         })
 
