@@ -8,7 +8,6 @@ import { Play, RefreshCw, Pause, AlertTriangle, Wifi, WifiOff, Brain } from 'luc
 import Header from '@/components/layout/Header'
 import VerdictGrid from '@/components/dashboard/VerdictGrid'
 import PriorityCoin from '@/components/dashboard/PriorityCoin'
-import AgentFeed from '@/components/dashboard/AgentFeed'
 import StatsBar from '@/components/dashboard/StatsBar'
 import { useAgentStore } from '@/store/agentStore'
 import { useCoinStore } from '@/store/coinStore'
@@ -28,7 +27,7 @@ export default function DashboardClient() {
   const { address, isConnected, chain } = useAccount()
   const isOnCorrectChain = chain?.id === ACTIVE_CHAIN.id
 
-  const { heldCoins, isLoading: balancesLoading, refetch: refetchBalances } = useWalletBalances()
+  const { heldCoins, balances, isLoading: balancesLoading, refetch: refetchBalances } = useWalletBalances()
   const {
     status,
     verdicts,
@@ -315,16 +314,6 @@ export default function DashboardClient() {
           </div>
         )}
 
-        {CHAIN_CONFIG.isTestnet && (
-          <div className="mb-4 flex items-center gap-3 rounded-xl border border-orange-500/20 bg-orange-500/5 p-3 text-xs text-orange-300">
-            <span className="rounded bg-orange-500/20 px-1.5 py-0.5 font-bold text-orange-400">
-              TESTNET
-            </span>
-            Running on {CHAIN_CONFIG.name}. Prices are real (CoinGecko). Swaps are simulated - no
-            real funds at risk.
-          </div>
-        )}
-
         {!isConnected && (
           <div className="mb-4 flex items-center justify-between rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
             <div className="flex items-center gap-3">
@@ -370,6 +359,7 @@ export default function DashboardClient() {
               lastUpdated={lastRunAt}
               isLoading={status === 'running'}
               hasScanned={hasScanned}
+              balances={balances}
             />
           </div>
 
@@ -398,7 +388,6 @@ export default function DashboardClient() {
 
 
 
-        <AgentFeed actions={actionFeed.slice(0, 10)} />
       </main>
     </div>
   )

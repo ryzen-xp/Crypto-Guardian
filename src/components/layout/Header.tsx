@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import ConnectWalletButton from '@/components/wallet/ConnectWalletButton'
 
 export const dynamic = 'force-dynamic'
-import { Shield, LayoutDashboard, Settings, Pause, Play, Activity, TerminalSquare } from 'lucide-react'
+import { Shield, LayoutDashboard, Settings, Pause, Play, Activity, TerminalSquare, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCoinStore } from '@/store/coinStore'
 import { useAgentStore } from '@/store/agentStore'
@@ -13,8 +13,9 @@ import { CHAIN_CONFIG } from '@/lib/chain-config'
 
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/terminal',  label: 'Terminal',  icon: TerminalSquare },
-  { href: '/settings',  label: 'Settings',  icon: Settings },
+  { href: '/history', label: 'History', icon: Clock },
+  { href: '/terminal', label: 'Terminal', icon: TerminalSquare },
+  { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
 export default function Header() {

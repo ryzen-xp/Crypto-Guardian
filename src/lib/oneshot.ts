@@ -133,10 +133,26 @@ async function getRelayerCapabilities(chainId: number): Promise<RelayerCapabilit
     params: [String(chainId)],
   }
 
-  const { res, json } = await fetchRelayerJson(body, relayerUrl)
-  if (!res.ok || !json) return null
-  const caps = json.result?.[String(chainId)] as RelayerCapabilities | undefined
-  return caps ?? null
+  try {
+    console.warn(`[1Shot] Fetching relayer capabilities from ${relayerUrl}`)
+    const { res, json } = await fetchRelayerJson(body, relayerUrl)
+    if (!res.ok) {
+      console.error(`[1Shot] Capabilities request failed with status ${res.status}`)
+      return null
+    }
+    if (!json) {
+      console.error(`[1Shot] Capabilities request returned invalid JSON`)
+      return null
+    }
+    const caps = json.result?.[String(chainId)] as RelayerCapabilities | undefined
+    if (caps) {
+      console.warn(`[1Shot] Capabilities retrieved: tokens=${caps.tokens?.length ?? 0}`)
+    }
+    return caps ?? null
+  } catch (err) {
+    console.error(`[1Shot] Failed to get capabilities: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
 }
 
 async function getRelayerFeeData(chainId: number, tokenAddress: string): Promise<RelayerFeeData | null> {
@@ -145,15 +161,26 @@ async function getRelayerFeeData(chainId: number, tokenAddress: string): Promise
     jsonrpc: '2.0',
     id: Math.random().toString(36).substring(2, 11),
     method: 'relayer_getFeeData',
-    params: {
-      chainId: String(chainId),
-      token: tokenAddress,
-    },
+    params: [String(chainId), tokenAddress],
   }
 
-  const { res, json } = await fetchRelayerJson(body, relayerUrl)
-  if (!res.ok || !json?.result) return null
-  return json.result as RelayerFeeData
+  try {
+    console.warn(`[1Shot] Fetching fee data for token ${tokenAddress}`)
+    const { res, json } = await fetchRelayerJson(body, relayerUrl)
+    if (!res.ok) {
+      console.error(`[1Shot] Fee data request failed with status ${res.status}`)
+      return null
+    }
+    if (!json?.result) {
+      console.error(`[1Shot] Fee data request returned no result`)
+      return null
+    }
+    console.warn(`[1Shot] Fee data retrieved: minFee=${(json.result as RelayerFeeData).minFee}`)
+    return json.result as RelayerFeeData
+  } catch (err) {
+    console.error(`[1Shot] Failed to get fee data: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
 }
 
 async function getRelayerQuote(
@@ -168,21 +195,37 @@ async function getRelayerQuote(
     method: 'relayer_getQuote',
     params: [
       {
-        ...transaction,
-        capabilities: {
-          payment: {
-            type: 'erc20',
-            token: paymentToken,
-          },
+        chainId: String(chainId),
+        transactions: transaction.transactions,
+        payment: {
+          type: 'erc20',
+          token: paymentToken,
         },
       },
     ],
   }
 
-  const { res, json } = await fetchRelayerJson(body, relayerUrl)
-  if (!res.ok || !json) return null
-  if (json.error) return null
-  return json.result as RelayerQuoteResponse
+  try {
+    console.warn(`[1Shot] Requesting quote for transaction`)
+    const { res, json } = await fetchRelayerJson(body, relayerUrl)
+    if (!res.ok) {
+      console.error(`[1Shot] Quote request failed with status ${res.status}`)
+      return null
+    }
+    if (!json) {
+      console.error(`[1Shot] Quote request returned invalid JSON`)
+      return null
+    }
+    if (json.error) {
+      console.error(`[1Shot] Quote error: ${JSON.stringify(json.error)}`)
+      return null
+    }
+    console.warn(`[1Shot] Quote retrieved: fee=${(json.result as RelayerQuoteResponse).fee?.amount ?? 'unknown'}`)
+    return json.result as RelayerQuoteResponse
+  } catch (err) {
+    console.error(`[1Shot] Failed to get quote: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
 }
 
 type Relayer7710EstimateResponse = {
@@ -206,16 +249,34 @@ async function estimateRelayerTransaction(
     method: 'relayer_estimate7710Transaction',
     params: [
       {
-        ...transaction,
-        payment: { type: 'token', address: paymentToken },
+        chainId: String(chainId),
+        transactions: transaction.transactions,
+        payment: { type: 'erc20', token: paymentToken },
       },
     ],
   }
 
-  const { res, json } = await fetchRelayerJson(body, relayerUrl)
-  if (!res.ok || !json) return null
-  if (json.error) return null
-  return json.result as Relayer7710EstimateResponse
+  try {
+    console.warn(`[1Shot] Estimating transaction`)
+    const { res, json } = await fetchRelayerJson(body, relayerUrl)
+    if (!res.ok) {
+      console.error(`[1Shot] Estimate request failed with status ${res.status}`)
+      return null
+    }
+    if (!json) {
+      console.error(`[1Shot] Estimate request returned invalid JSON`)
+      return null
+    }
+    if (json.error) {
+      console.error(`[1Shot] Estimate error: ${JSON.stringify(json.error)}`)
+      return null
+    }
+    console.warn(`[1Shot] Estimate retrieved: success=${(json.result as Relayer7710EstimateResponse).success}`)
+    return json.result as Relayer7710EstimateResponse
+  } catch (err) {
+    console.error(`[1Shot] Failed to estimate: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
 }
 
 async function sendRelayerTransaction(
@@ -229,35 +290,44 @@ async function sendRelayerTransaction(
     jsonrpc: '2.0',
     id: Math.random().toString(36).substring(2, 11),
     method: 'relayer_send7710Transaction',
-    params: {
-      ...transaction,
-      payment: { type: 'token', address: paymentToken },
-      ...(context ? { context } : {}),
-    },
+    params: [
+      {
+        chainId: String(chainId),
+        transactions: transaction.transactions,
+        payment: { type: 'erc20', token: paymentToken },
+        ...(context ? { context } : {}),
+      },
+    ],
   }
 
   console.warn(`[1Shot] Sending JSON-RPC request to ${relayerUrl}`)
   console.warn(`[1Shot] Method: relayer_send7710Transaction`)
-  console.warn(`[1Shot] Request body: ${JSON.stringify(body)}`)
+  console.warn(`[1Shot] Payment token: ${paymentToken}`)
+  console.warn(`[1Shot] Chain ID: ${chainId}`)
 
-  const { res, json } = await fetchRelayerJson(body, relayerUrl)
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`1Shot sendTransaction error ${res.status}: ${text}`)
+  try {
+    const { res, json } = await fetchRelayerJson(body, relayerUrl)
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`1Shot sendTransaction error ${res.status}: ${text}`)
+    }
+
+    if (json?.error) {
+      throw new Error(`1Shot sendTransaction failed: ${JSON.stringify(json.error)}`)
+    }
+
+    if (typeof json?.result === 'string') return json.result
+
+    if (json?.result && typeof json.result === 'object') {
+      const result = json.result as { id?: string; taskId?: string }
+      return result.id ?? result.taskId ?? null
+    }
+
+    return null
+  } catch (err) {
+    console.error(`[1Shot] Send transaction error: ${err instanceof Error ? err.message : String(err)}`)
+    throw err
   }
-
-  if (json?.error) {
-    throw new Error(`1Shot sendTransaction failed: ${JSON.stringify(json.error)}`)
-  }
-
-  if (typeof json?.result === 'string') return json.result
-
-  if (json?.result && typeof json.result === 'object') {
-    const result = json.result as { id?: string; taskId?: string }
-    return result.id ?? result.taskId ?? null
-  }
-
-  return null
 }
 
 function parseAmountToBigInt(value: string | number | bigint): bigint {
@@ -301,50 +371,66 @@ export async function relayTransaction(
 
   try {
     // Discover relayer capabilities and payment token
+    console.warn(`[1Shot] Starting relay transaction for chain ${chainId}`)
     const relayerCapabilities = capabilities ?? await getRelayerCapabilities(chainId)
-    if (!relayerCapabilities || !relayerCapabilities.tokens?.length) {
-      console.error(
-        `[1Shot] No supported payment tokens available for chain ${chainId}. Capabilities: ${JSON.stringify(relayerCapabilities)}`
-      )
-      throw new Error('1Shot relayer has no supported payment token for this chain.')
+    
+    let paymentToken: string | undefined
+    let tokenDecimals = 6 // Default USDC decimals
+
+    if (relayerCapabilities?.tokens && relayerCapabilities.tokens.length > 0) {
+      paymentToken = relayerCapabilities.tokens[0]?.address
+      tokenDecimals = relayerCapabilities.tokens[0]?.decimals ? Number(relayerCapabilities.tokens[0].decimals) : 6
+      console.warn(`[1Shot] Using payment token from capabilities: ${paymentToken} (decimals: ${tokenDecimals})`)
+      if (relayerCapabilities.targetAddress) {
+        console.warn(`[1Shot] Relayer target address: ${relayerCapabilities.targetAddress}`)
+      }
+    } else {
+      // Fallback: use USDC address from chain config
+      if (chainId === 11155111) {
+        paymentToken = '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238' // Sepolia USDC
+        console.warn(`[1Shot] No capabilities found, using fallback USDC: ${paymentToken}`)
+      } else {
+        throw new Error('1Shot relayer capabilities not available and no fallback token configured')
+      }
     }
 
-    const paymentToken = relayerCapabilities.tokens?.[0]?.address
     if (!paymentToken) {
-      console.error(`[1Shot] Relayer capabilities missing token address: ${JSON.stringify(relayerCapabilities)}`)
-      throw new Error('1Shot relayer capabilities returned no payment token address.')
-    }
-    console.warn(`[1Shot] Using payment token from capabilities: ${paymentToken}`)
-    if (relayerCapabilities.targetAddress) {
-      console.warn(`[1Shot] Relayer target address available: ${relayerCapabilities.targetAddress}`)
+      throw new Error('No payment token could be determined for relay')
     }
 
+    // Get fee data for the payment token
     const feeData = await getRelayerFeeData(chainId, paymentToken)
-    const tokenDecimals = relayerCapabilities.tokens?.[0]?.decimals ? Number(relayerCapabilities.tokens[0].decimals) : 6
-
     const minFeeAmount = feeData?.minFee
       ? parseUnits(feeData.minFee, tokenDecimals)
       : BigInt(0)
 
     let feeAmount = minFeeAmount
+    console.warn(`[1Shot] Min fee from relayer: ${formatUnits(minFeeAmount, tokenDecimals)} ${feeData?.token?.symbol ?? '?'}`)
+
+    // Get estimate and quote
     const estimateResult = await estimateRelayerTransaction(chainId, transaction, paymentToken)
     const quoteResult = await getRelayerQuote(chainId, transaction, paymentToken)
-    if (estimateResult?.success !== false) {
-      const estimatedPayment = estimateResult?.requiredPaymentAmount
-      if (estimatedPayment) {
-        feeAmount = parseAmountToBigInt(estimatedPayment)
-      } else if (quoteResult?.fee?.amount) {
-        feeAmount = parseAmountToBigInt(quoteResult.fee.amount)
-      }
+    
+    if (estimateResult?.success !== false && estimateResult?.requiredPaymentAmount) {
+      feeAmount = parseAmountToBigInt(estimateResult.requiredPaymentAmount)
+      console.warn(`[1Shot] Estimated payment: ${formatUnits(feeAmount, tokenDecimals)}`)
     } else if (quoteResult?.fee?.amount) {
       feeAmount = parseAmountToBigInt(quoteResult.fee.amount)
+      console.warn(`[1Shot] Quote fee: ${formatUnits(feeAmount, tokenDecimals)}`)
     }
 
+    // Get context for permission
     const contextToUse =
       estimateResult?.context ??
       (estimateResult?.contextByChainId ? estimateResult.contextByChainId[String(chainId)] : undefined) ??
       feeData?.context ??
       context
+
+    if (contextToUse) {
+      console.warn(`[1Shot] Using permission context`)
+    }
+
+    // Send relay transaction
     const taskId = await sendRelayerTransaction(
       chainId,
       transaction,
@@ -356,6 +442,7 @@ export async function relayTransaction(
     }
 
     const estimatedGasUSDC = formatUnits(feeAmount, tokenDecimals)
+    console.warn(`[1Shot] Relay successful, task ID: ${taskId}, estimated fee: ${estimatedGasUSDC} USDC`)
 
     return {
       relayId: taskId,
@@ -364,7 +451,7 @@ export async function relayTransaction(
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error)
-    console.error(`[1Shot] Full error: ${errorMsg}`)
+    console.error(`[1Shot] Relay transaction failed: ${errorMsg}`)
     // Force real execution — no fallback to demo mode
     throw error
   }

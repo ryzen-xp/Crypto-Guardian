@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { getCoin, MONITORED_COINS } from './coins'
 import { fetchWalletBalances } from './balances'
 import { fetchMarketSnapshot } from './market-data'
@@ -413,6 +414,16 @@ async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
       to: calldata.to, data: calldata.data, value: calldata.value,
       userAddress, chainId: IS_TESTNET ? 11155111 : 1,
     })
+
+    // If swap is confirmed/pending, update position
+    if (relay.status === 'confirmed' || relay.status === 'pending') {
+      if (action === 'SELL') {
+        // SELL: Record that we exited and created new USDC position at current price
+        const { recordSwap } = await import('./positions')
+        await recordSwap(userAddress, symbol, price, amountUSD / price)
+        console.log(`[Position] Recorded SELL at $${price.toFixed(2)} for ${symbol}. New entry baseline: $${price.toFixed(2)}`)
+      }
+    }
 
     return {
       id: crypto.randomUUID(), timestamp: new Date(),
