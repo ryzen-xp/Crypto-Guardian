@@ -1,25 +1,27 @@
 'use client'
 
-import { Shield, Pause, Play, Check } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Shield, AlertCircle, Check, Lock } from 'lucide-react'
+import { useAccount } from 'wagmi'
 import Header from '@/components/layout/Header'
-
-export const dynamic = 'force-dynamic'
-import { MONITORED_COINS, STABLECOINS } from '@/lib/coins'
-import { useCoinStore } from '@/store/coinStore'
 import { cn } from '@/lib/utils'
+import { useCoinStore } from '@/store/coinStore'
+import { MONITORED_COINS, STABLECOINS } from '@/lib/coins'
 import type { RiskSensitivity } from '@/lib/types'
 
+export const dynamic = 'force-dynamic'
+
 const RISK_OPTIONS: { value: RiskSensitivity; label: string; desc: string }[] = [
-  { value: 'conservative', label: 'Conservative', desc: 'Sell on DANGER only. Never buys.' },
-  { value: 'moderate', label: 'Moderate', desc: 'Sell on DANGER + CAUTION. No buys.' },
-  {
-    value: 'aggressive',
-    label: 'Aggressive',
-    desc: 'Sell on DANGER + CAUTION. Buys on OPPORTUNITY.',
-  },
+  { value: 'conservative', label: 'Conservative', desc: 'DANGER only' },
+  { value: 'moderate', label: 'Moderate', desc: 'DANGER + CAUTION' },
+  { value: 'aggressive', label: 'Aggressive', desc: 'DANGER + CAUTION + Buy on OPPORTUNITY' },
 ]
 
 export default function SettingsPage() {
+  const { address } = useAccount()
+  const [hasPermission, setHasPermission] = useState(false)
+  const [isGranting, setIsGranting] = useState(false)
+
   const {
     selectedCoins,
     coinSettings,
@@ -31,7 +33,89 @@ export default function SettingsPage() {
     setSelectedStablecoin,
   } = useCoinStore()
 
-  const stablecoins = Object.values(STABLECOINS)
+  // Check if permission is stored
+  useEffect(() => {
+    if (address) {
+      const storedPerm = localStorage.getItem(`delegated_${address}`)
+      setHasPermission(!!storedPerm)
+    }
+  }, [address])
+
+  // Grant delegation permission - request MetaMask signature
+  const handleGrantPermission = async () => {
+    if (!address) return
+
+    setIsGranting(true)
+    try {
+      if (!window.ethereum) {
+        throw new Error('No wallet provider found - please connect MetaMask or another wallet')
+      }
+
+      console.warn(`[Permission] Requesting signature from wallet for ${address}`)
+
+      // Create a message for user to sign
+      const timestamp = new Date().toISOString()
+      const message = `I grant permission to CryptoGuardian to execute swaps via 1-Shot relayer.
+
+Wallet: ${address}
+Chain: Sepolia (11155111)
+Timestamp: ${timestamp}
+
+This signature proves you authorized this permission.`
+
+      // Request user to sign the message with their wallet
+      const signature = await window.ethereum.request({
+        method: 'personal_sign',
+        params: [message, address],
+      } as any)
+
+      if (!signature) {
+        throw new Error('User rejected signing - permission not granted')
+      }
+
+      console.warn(`[Permission] User signed with wallet: ${signature.slice(0, 20)}...`)
+
+      // Send permission grant request to backend with signature
+      const response = await fetch('/api/grant-permission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userAddress: address,
+          chainId: 11155111, // Sepolia
+          signature, // Proof of wallet signature
+          message,
+        }),
+      })
+
+      const result = (await response.json()) as { ok: boolean; error?: string; permissionId?: string }
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || 'Failed to grant permission')
+      }
+
+      // Store permission locally with signature proof
+      localStorage.setItem(
+        `delegated_${address}`,
+        JSON.stringify({
+          grantedAt: new Date().toISOString(),
+          delegateTo: '0x02c9979a75fbdbc3a77485024ab8b6474308591e', // 1-Shot relayer
+          authorizedAccount: address,
+          signature, // Proof wallet signed
+          permissionId: result.permissionId,
+          version: '1.0',
+        })
+      )
+
+      setHasPermission(true)
+      console.warn(`[Permission] Permission granted and verified with wallet signature`)
+    } catch (err) {
+      console.error('Failed to grant permission:', err)
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      alert(`Permission grant failed: ${errorMsg}`)
+    } finally {
+      setIsGranting(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -40,38 +124,67 @@ export default function SettingsPage() {
       <main className="mx-auto max-w-3xl px-4 py-8">
         <h1 className="mb-6 text-2xl font-bold">Settings</h1>
 
-        {/* Master pause */}
-        <section className="mb-6 rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="font-semibold">Agent Status</h2>
-              <p className="mt-1 text-sm text-gray-400">
-                {isPaused
-                  ? 'Agent is paused. No swaps will execute.'
-                  : 'Agent is actively monitoring your portfolio.'}
-              </p>
-            </div>
-            <button
-              onClick={togglePause}
-              className={cn(
-                'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors',
-                isPaused ? 'bg-green-600 hover:bg-green-500' : 'bg-yellow-600 hover:bg-yellow-500'
+        {/* Permission Section */}
+        <section className={cn(
+          'mb-6 rounded-xl border p-5 transition-all',
+          hasPermission
+            ? 'border-green-500/30 bg-green-500/5'
+            : 'border-yellow-500/30 bg-yellow-500/5'
+        )}>
+          <div className="flex items-start gap-4">
+            <div className={cn(
+              'flex h-10 w-10 items-center justify-center rounded-full flex-shrink-0',
+              hasPermission ? 'bg-green-500/20' : 'bg-yellow-500/20'
+            )}>
+              {hasPermission ? (
+                <Check className="h-5 w-5 text-green-400" />
+              ) : (
+                <AlertCircle className="h-5 w-5 text-yellow-400" />
               )}
-            >
-              {isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-              {isPaused ? 'Resume Agent' : 'Pause Agent'}
-            </button>
+            </div>
+            <div className="flex-1">
+              <h2 className="font-semibold">
+                {hasPermission ? '✅ Relayer Permission Granted' : '⚠️  Relayer Permission Required'}
+              </h2>
+              <p className="mt-1 text-sm text-gray-400">
+                {hasPermission
+                  ? 'Your wallet has authorized the 1-Shot relayer to execute swaps and charge gas fees in USDC.'
+                  : 'Grant permission to allow the 1-Shot relayer to execute swaps on your behalf and pay gas fees from USDC.'}
+              </p>
+              {!hasPermission && (
+                <button
+                  onClick={handleGrantPermission}
+                  disabled={isGranting || !address}
+                  className={cn(
+                    'mt-3 flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all',
+                    'bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
+                  )}
+                >
+                  <Lock className="h-4 w-4" />
+                  {isGranting ? 'Granting...' : 'Grant Permission'}
+                </button>
+              )}
+            </div>
           </div>
         </section>
 
-        {/* Stablecoin */}
+        {/* Show warning if no permission */}
+        {!hasPermission && (
+          <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/5 p-4">
+            <p className="text-sm text-red-300">
+              🔒 <strong>Permission required:</strong> You must grant permission above before swaps can execute.
+            </p>
+          </div>
+        )}
+
+        {/* Safe Asset Selection */}
         <section className="mb-6 rounded-xl border border-gray-800 bg-gray-900 p-5">
           <h2 className="mb-1 font-semibold">Safe Asset (Stablecoin)</h2>
           <p className="mb-4 text-sm text-gray-400">
-            All DANGER swaps convert your holdings into this stablecoin.
+            When protecting holdings, swap to this stablecoin.
           </p>
           <div className="grid grid-cols-2 gap-2">
-            {stablecoins.map((stable) => (
+            {Object.values(STABLECOINS).map((stable) => (
               <button
                 key={stable.symbol}
                 onClick={() => setSelectedStablecoin(stable.symbol)}
@@ -88,40 +201,26 @@ export default function SettingsPage() {
                     <Check className="ml-auto h-4 w-4 text-blue-400" />
                   )}
                 </div>
-                <p className="mt-0.5 text-xs text-gray-500">{stable.description}</p>
               </button>
             ))}
           </div>
         </section>
 
-        {/* Per-coin settings */}
+        {/* Coin Monitoring */}
         <section className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <h2 className="mb-4 font-semibold">Coin Monitoring</h2>
-          <div className="space-y-4">
+          <h2 className="mb-4 font-semibold">Monitored Coins</h2>
+          <div className="space-y-3">
             {Object.values(MONITORED_COINS).map((coin) => {
               const isActive = selectedCoins.includes(coin.symbol)
               const setting = coinSettings[coin.symbol]
 
               return (
-                <div
-                  key={coin.symbol}
-                  className={cn(
-                    'rounded-lg border transition-all',
-                    isActive ? 'border-gray-700 bg-gray-800' : 'border-gray-800 opacity-50'
-                  )}
-                >
-                  <div className="flex items-center gap-3 p-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-700 text-xs font-bold">
-                      {coin.symbol.slice(0, 2)}
-                    </div>
-                    <div className="flex-1">
-                      <span className="text-sm font-semibold">{coin.symbol}</span>
-                      <span className="ml-2 text-xs text-gray-500">{coin.name}</span>
-                    </div>
+                <div key={coin.symbol}>
+                  <div className="flex items-center gap-3 p-3 rounded-lg bg-gray-800 hover:bg-gray-750 transition-colors">
                     <button
                       onClick={() => toggleCoin(coin.symbol)}
                       className={cn(
-                        'relative h-5 w-9 rounded-full transition-colors',
+                        'relative h-5 w-9 rounded-full transition-colors flex-shrink-0',
                         isActive ? 'bg-blue-600' : 'bg-gray-700'
                       )}
                     >
@@ -132,65 +231,43 @@ export default function SettingsPage() {
                         )}
                       />
                     </button>
+                    <div className="flex-1">
+                      <span className="text-sm font-semibold">{coin.symbol}</span>
+                      <span className="ml-2 text-xs text-gray-500">{coin.name}</span>
+                    </div>
                   </div>
 
                   {isActive && setting && (
-                    <div className="grid grid-cols-1 gap-3 border-t border-gray-700 p-3 sm:grid-cols-3">
-                      <div>
-                        <label className="mb-1 block text-xs text-gray-500">Max Swap ($)</label>
-                        <input
-                          type="number"
-                          value={setting.maxSwapUSD}
-                          onChange={(e) =>
-                            updateCoinSetting(coin.symbol, { maxSwapUSD: Number(e.target.value) })
-                          }
-                          className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs text-gray-500">Daily Limit ($)</label>
-                        <input
-                          type="number"
-                          value={setting.dailyLimitUSD}
-                          onChange={(e) =>
-                            updateCoinSetting(coin.symbol, {
-                              dailyLimitUSD: Number(e.target.value),
-                            })
-                          }
-                          className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs text-gray-500">Min Hold ($)</label>
-                        <input
-                          type="number"
-                          value={setting.minHoldUSD}
-                          onChange={(e) =>
-                            updateCoinSetting(coin.symbol, { minHoldUSD: Number(e.target.value) })
-                          }
-                          className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-                        />
-                      </div>
-                      <div className="sm:col-span-3">
-                        <label className="mb-2 block text-xs text-gray-500">Risk Sensitivity</label>
-                        <div className="flex gap-2">
-                          {RISK_OPTIONS.map((opt) => (
-                            <button
-                              key={opt.value}
-                              onClick={() =>
-                                updateCoinSetting(coin.symbol, { riskSensitivity: opt.value })
-                              }
-                              title={opt.desc}
-                              className={cn(
-                                'flex-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors',
-                                setting.riskSensitivity === opt.value
-                                  ? 'border-blue-500 bg-blue-500/10 text-blue-400'
-                                  : 'border-gray-700 text-gray-400 hover:border-gray-500'
-                              )}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
+                    <div className="mt-2 ml-12 space-y-2 text-sm">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">Max Swap ($)</label>
+                          <input
+                            type="number"
+                            value={setting.maxSwapUSD}
+                            onChange={(e) =>
+                              updateCoinSetting(coin.symbol, { maxSwapUSD: Number(e.target.value) })
+                            }
+                            className="w-full rounded px-2 py-1.5 bg-gray-900 border border-gray-700 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">Risk Level</label>
+                          <select
+                            value={setting.riskSensitivity}
+                            onChange={(e) =>
+                              updateCoinSetting(coin.symbol, {
+                                riskSensitivity: e.target.value as RiskSensitivity,
+                              })
+                            }
+                            className="w-full rounded px-2 py-1.5 bg-gray-900 border border-gray-700 text-sm"
+                          >
+                            {RISK_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       </div>
                     </div>
@@ -201,10 +278,10 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        <div className="mt-6 rounded-lg border border-gray-800 bg-gray-900/50 p-4 text-center text-xs text-gray-500">
+        {/* Info Footer */}
+        <div className="mt-8 rounded-lg border border-gray-800 bg-gray-900/50 p-4 text-center text-xs text-gray-500">
           <Shield className="mx-auto mb-2 h-4 w-4 text-gray-600" />
-          Permissions active for 28 more days.{' '}
-          <button className="text-blue-400 hover:text-blue-300">Renew early</button>
+          Your settings are saved locally and synced across sessions.
         </div>
       </main>
     </div>

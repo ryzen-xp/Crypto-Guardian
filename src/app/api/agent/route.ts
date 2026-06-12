@@ -9,6 +9,7 @@ type RequestBody = {
   coinSettings: CoinSettings
   stablecoinSymbol?: string
   forceRun?: boolean
+  hasPermission?: boolean
 }
 
 // Rate limiting — prevent more than 1 manual call per minute per address
@@ -24,6 +25,7 @@ export async function POST(req: NextRequest) {
       coinSettings,
       stablecoinSymbol = DEFAULT_STABLECOIN,
       forceRun = false,
+      hasPermission = false,
     } = body
 
     if (!userAddress || !activeCoins?.length) {
@@ -66,6 +68,7 @@ export async function POST(req: NextRequest) {
       coinSettings,
       stablecoinSymbol,
       forceRun,
+      hasPermission,
     })
 
     return NextResponse.json({ success: true, data: result })

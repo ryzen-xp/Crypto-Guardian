@@ -94,6 +94,10 @@ export default function DashboardClient() {
 
       const activeCoins = Object.keys(MONITORED_COINS)
 
+      // Check if user has granted permission
+      const permissionKey = `delegated_${address}`
+      const hasPermission = !!localStorage.getItem(permissionKey)
+
       try {
         const res = await fetch('/api/agent', {
           method: 'POST',
@@ -104,6 +108,7 @@ export default function DashboardClient() {
             coinSettings,
             stablecoinSymbol: selectedStablecoin,
             forceRun: force,
+            hasPermission,
           }),
         })
 

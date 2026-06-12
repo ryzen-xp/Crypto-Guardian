@@ -85,10 +85,11 @@ type AgentLoopParams = {
   coinSettings: CoinSettings
   stablecoinSymbol: string
   forceRun?: boolean
+  hasPermission?: boolean
 }
 
 export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopResult> {
-  const { userAddress, activeCoins, coinSettings, stablecoinSymbol, forceRun = false } = params
+  const { userAddress, activeCoins, coinSettings, stablecoinSymbol, forceRun = false, hasPermission = false } = params
 
   if (!forceRun && isOnCooldown()) {
     throw new Error(`Agent is on cooldown. Next run at: ${getNextRunAt().toISOString()}`)
@@ -283,6 +284,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
       price: marketSnapshot.prices[prioritySymbol]?.usd ?? 0,
       reasoning, stablecoinSymbol,
       balance: balance ?? { symbol: prioritySymbol, rawBalance: BigInt(0), decimals: 18, formatted: 0, isHeld: false },
+      hasPermission,
     })
 
     if (actionTaken.status === 'confirmed') {
@@ -394,13 +396,29 @@ type ExecuteSwapParams = {
   symbol: string; action: 'BUY' | 'SELL'; verdict: Verdict; amountUSD: number
   userAddress: string; price: number; reasoning: string; stablecoinSymbol: string
   balance: { symbol: string; rawBalance: bigint; decimals: number; formatted: number; isHeld: boolean }
+  hasPermission?: boolean
 }
 
 async function executeSwap(params: ExecuteSwapParams): Promise<AgentAction> {
-  const { symbol, action, verdict, amountUSD, userAddress, price, reasoning, stablecoinSymbol, balance } = params
+  const { symbol, action, verdict, amountUSD, userAddress, price, reasoning, stablecoinSymbol, balance, hasPermission = false } = params
   const coin = getCoin(symbol)
 
   try {
+    // Check if user has granted permission
+    if (!hasPermission) {
+      console.error(`[Agent] No permission granted for ${userAddress} - swap blocked`)
+      return {
+        id: crypto.randomUUID(),
+        timestamp: new Date(),
+        coin: symbol,
+        verdict,
+        action,
+        amountUSD,
+        reasoning: `⚠️ No relayer permission granted. Please grant permission in Settings before swaps can execute.`,
+        status: 'failed',
+      }
+    }
+
     const calldata = action === 'SELL'
       ? buildSellToStable({
           tokenAddress: coin.baseAddress, tokenDecimals: coin.decimals,
