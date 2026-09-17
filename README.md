@@ -358,6 +358,7 @@ Set your webhook URL in 1Shot dashboard:
 https://your-app.vercel.app/api/webhooks
 ```
 
+
 ---
 
 ## Documentation
